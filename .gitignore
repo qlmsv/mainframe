@@ -1,0 +1,19 @@
+# Personal: settings, data, memory, the owner's knowledge base, local MCP config
+.env
+data/
+mcp.json
+kb/*
+!kb/README.md
+!kb/примеры/
+scripts/personal/
+# Your own modules (trading, your banks, your course): loaded if present, never committed
+personal/
+# Built or downloaded
+node_modules/
+vendor/
+# System
+.DS_Store
+.impeccable/
+
+# Personal funnel page with real numbers and lead names
+public/journey/

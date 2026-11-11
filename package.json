@@ -1,0 +1,22 @@
+{
+  "name": "mainframe",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Личный мейнфрейм на Claude Agent SDK: Telegram, сессии, cron, Mac",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.319",
+    "@huggingface/transformers": "^3.8.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "croner": "^11.0.0",
+    "grammy": "^1.46.0",
+    "zod": "^4.6.7"
+  }
+}
