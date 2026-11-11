@@ -92,7 +92,7 @@ const PANES = {
     <div class="heroc green"><div class="l">Всего на счетах</div><div class="v">≈ 486 300 ₽</div><div class="tiles"><div class="tile">Сегодня<b>650 ₽</b></div><div class="tile">7 дней<b>14 900 ₽</b></div><div class="tile">Месяц<b>61 200 ₽</b></div></div></div>
     <div class="card"><div class="tt">Месяц по категориям</div>${[['Еда', 72, '18 420 ₽'], ['Такси', 48, '12 300 ₽'], ['Дом', 35, '9 100 ₽'], ['Подписки', 18, '4 600 ₽']].map(([n, w, v], i) => `<div class="barrow"><span>${n}</span><span class="track"><i style="width:${w}%;animation-delay:${i * 120}ms"></i></span><b>${v}</b></div>`).join('')}</div>`,
   social: () => `<h3>Соцсети</h3><div class="sub">посты, календарь, конкуренты</div>
-    <div class="grid2"><div class="post"><div class="net">✈️ Telegram · сегодня 10:00</div><p>Перестал открывать пять приложений, чтобы разобраться с делами…</p><span class="pill g">опубликовано · 2 заявки</span></div>
+    <div class="grid2"><div class="post"><div class="net">✈️ Telegram · сегодня 10:00</div><p>Перестал открывать пять приложений, чтобы разобраться с делами…</p><span class="pill g">опубликовано · 31 реакция</span></div>
     <div class="post"><div class="net">💼 LinkedIn · завтра 9:00</div><p>Как ИИ-помощник сэкономил мне 2 часа в день: три сценария…</p><span class="pill">на одобрении</span></div></div>
     <div class="card" style="margin-top:10px"><div class="tt">Просмотры за неделю</div><svg class="spark" viewBox="0 0 300 70" preserveAspectRatio="none"><path d="M0 60 L40 52 L80 55 L120 40 L160 42 L200 25 L240 30 L300 8" fill="none" stroke="#ff7a45" stroke-width="3" stroke-linecap="round"/></svg></div>`,
   sessions: () => `<h3>Сессии</h3><div class="sub">проекты, в которых помощник работает</div>

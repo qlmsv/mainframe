@@ -268,6 +268,41 @@ route('POST', '/api/content/auto/run', () => { content.autoFromRivals(6).catch((
 
 // Finance: expenses from bank mails, receipts and manual entries.
 route('GET', '/api/finance', async () => ({ ...financeSummary(), rates: await rates() }));
+
+// The home screen in one request: money, what runs now (with progress), what waits for the owner.
+const PROGRESS_RE = /(\d+)\s*\/\s*(\d+)\s*(готов|сделан|done)?/i;
+function runProgress(runId) {
+  // The session reports «N/M готово» through notify_owner: the latest such message is the progress.
+  const ev = all("SELECT content FROM run_events WHERE run_id = ? AND kind = 'tool' AND content LIKE '%notify_owner%' ORDER BY id DESC LIMIT 20", runId);
+  for (const e of ev) {
+    let text = '';
+    try { text = JSON.parse(e.content).input || ''; } catch { text = e.content; }
+    const m = PROGRESS_RE.exec(text);
+    if (m && Number(m[2]) > 1 && Number(m[1]) <= Number(m[2])) return { n: Number(m[1]), m: Number(m[2]), text: text.replace(/[*_#`]/g, '').replace(/\s+/g, ' ').slice(0, 140) };
+  }
+  const steps = get("SELECT COUNT(*) c FROM run_events WHERE run_id = ? AND kind = 'tool'", runId).c;
+  return { steps };
+}
+route('GET', '/api/home', async () => {
+  const running = all(`SELECT r.id, r.status, r.prompt, r.origin, r.started_at, p.name project, p.id project_id FROM runs r JOIN projects p ON p.id = r.project_id
+    WHERE r.status IN ('running', 'queued') ORDER BY r.status = 'running' DESC, r.id`).map((r) => ({
+    ...r, prompt: /^\[Задача по расписанию «(.+?)»\]/.test(r.prompt || '') ? `⏰ ${/^\[Задача по расписанию «(.+?)»\]/.exec(r.prompt)[1]}` : String(r.prompt || '').replace(/^\[[^\]]*\]\s*/, '').replace(/^Фоновая задача[^:]*:\s*/i, '').replace(/\s+/g, ' ').slice(0, 160), progress: runProgress(r.id),
+  }));
+  // Answers that ended with buttons and got no reply in that project afterwards (24 hours).
+  const asked = all(`SELECT r.id, r.result, r.finished_at, p.name project, p.id project_id FROM runs r JOIN projects p ON p.id = r.project_id
+    WHERE r.status = 'done' AND r.finished_at > ? AND r.result LIKE '%[[кнопки:%' ORDER BY r.id DESC LIMIT 20`, Date.now() - 86400000)
+    .filter((r) => !get("SELECT id FROM runs WHERE project_id = ? AND id > ? AND origin IN ('bot', 'ui') LIMIT 1", r.project_id, r.id))
+    .map((r) => {
+      const body = String(r.result || '').split('\n').filter((l) => l.trim() && !/^\[\[/.test(l.trim()));
+      const choices = (/\[\[кнопки:\s*(.+?)\]\]/.exec(r.result || '')?.[1] || '').split('|').map((x) => x.trim()).filter(Boolean).slice(0, 4);
+      return { id: r.id, project: r.project, project_id: r.project_id, at: r.finished_at, title: (body[0] || '').replace(/[*_#`=]/g, '').slice(0, 140), question: (body[body.length - 1] || '').replace(/[*_#`=]/g, '').slice(0, 160), choices };
+    });
+  return {
+    running, asked,
+    pendingMemory: memory.listPending().map((n) => ({ name: n.name, title: n.title })),
+    inboxOpen: get("SELECT COUNT(*) c FROM inbox WHERE status IN ('new','routed','error','done')").c,
+  };
+});
 route('POST', '/api/finance', ({ body }) => {
   if (!(Number(body.amount) > 0)) throw new Error('Нужна сумма');
   return addExpense({ amount: Number(body.amount), currency: body.currency || config.currency, merchant: String(body.merchant || '').slice(0, 120), category: body.category || undefined, note: String(body.note || '').slice(0, 300), at: body.at ? Date.parse(body.at) : undefined, source: 'вручную' });

@@ -1,5 +1,5 @@
-// Optional modules: extra features that are not part of the shared mainframe (a trading bot,
-// sales for your own course, a messenger only you use, parsers for your banks).
+// Optional modules: extra features that are not part of the shared mainframe (your CRM,
+// a messenger only you use, parsers for your banks, anything else just for you).
 // A module is a folder with index.js in modules/ (shared, in the repository) or personal/
 // (yours, kept out of git by .gitignore). index.js exports a default object, every field optional:
 //

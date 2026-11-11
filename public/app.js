@@ -18,6 +18,7 @@ if (inTelegram) {
 
 // ---------- icons ----------
 const ICONS = {
+  home: '<path d="m3 10 9-7 9 7"/><path d="M5 9v11h14V9"/><path d="M10 20v-6h4v6"/>',
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   sessions: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 10 3 2-3 2"/><path d="M13 14h4"/>',
   tasks: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
@@ -148,23 +149,39 @@ async function act(fn, okText) {
 
 // ---------- state ----------
 const VIEWS = [
-  { id: 'inbox', title: 'Входящие', icon: 'inbox', tab: true },
-  { id: 'today', title: 'Сегодня', icon: 'calendar', tab: true },
+  { id: 'home', title: 'Главная', icon: 'home', tab: true },
   { id: 'sessions', title: 'Сессии', icon: 'sessions', tab: true },
-  { id: 'notes', title: 'Заметки', icon: 'note', tab: true },
+  { id: 'money', title: 'Деньги', icon: 'wallet', tab: true },
+  { id: 'reach', title: 'Рост', icon: 'chart', tab: true },
   { id: 'memory', title: 'Память', icon: 'spark', more: 'Что агент знает о тебе и поиск по всей истории' },
-  { id: 'social', title: 'Соцсети', icon: 'chart', more: 'Telegram-канал и Metricool: цифры и советы' },
-  { id: 'finance', title: 'Финансы', icon: 'wallet', more: 'Расходы: письма банков, чеки, вручную' },
-  { id: 'tasks', title: 'Задачи', icon: 'tasks', more: 'Расписание: сводки, проверки, напоминания' },
-  { id: 'people', title: 'Люди', icon: 'people', more: 'Кто пишет и что с этим делать' },
-  { id: 'log', title: 'Журнал', icon: 'log', more: 'Каждое действие агента и системы' },
-  { id: 'system', title: 'Система', icon: 'system', more: 'Подключения, бот, Mini App, почта, голосовые' },
+  { id: 'people', title: 'Люди и сообщения', icon: 'people', more: 'Кто что писал: поиск и последние сообщения' },
+  { id: 'system', title: 'Система', icon: 'system', more: 'Подключения, журнал, бот и пульт' },
   { id: 'more', title: 'Ещё', icon: 'more', tab: true, mobileOnly: true },
 ];
-const MORE_VIEWS = ['more', 'memory', 'social', 'finance', 'tasks', 'people', 'log', 'system'];
+const MORE_VIEWS = ['more', 'memory', 'people', 'system'];
+// Sections with segments. Optional modules add theirs (MF.view with section: 'money' or 'reach').
+const SEGMENTS = {
+  sessions: [['chats', 'Чаты'], ['schedule', 'Расписание']],
+  money: [['finance', 'Финансы']],
+  reach: [['social', 'Соцсети']],
+};
+// Old section ids (saved in the browser, links in the bot) open their new place.
+// Modules add their own ids here when they register a segment.
+const LEGACY = { inbox: ['home'], today: ['home'], notes: ['home'], tasks: ['sessions', 'schedule'], log: ['system'], finance: ['money', 'finance'], social: ['reach', 'social'], growth: ['reach'] };
+const SEG = (() => { try { return JSON.parse(localStorage.getItem('mf_seg') || '{}'); } catch { return {}; } })();
+function resolveView(id) {
+  const l = LEGACY[id];
+  if (!l) return id;
+  if (l[1]) SEG[l[0]] = l[1];
+  return l[0];
+}
+const segOf = (host) => {
+  const list = SEGMENTS[host] || [];
+  return list.some(([k]) => k === SEG[host]) ? SEG[host] : list[0]?.[0];
+};
 const S = {
   socTab: (() => { try { return localStorage.getItem('mf_soctab') || 'overview'; } catch { return 'overview'; } })(),
-  view: localStorage.getItem('mf_view') || 'inbox',
+  view: resolveView(localStorage.getItem('mf_view') || 'home'),
   project: Number(localStorage.getItem('mf_project')) || null,
   detail: false,
   inboxFilter: 'open',
@@ -179,15 +196,29 @@ const S = {
   past: {}, // project id -> earlier transcript of an attached session
   openSteps: {}, // unfolded "steps" lines in the chat
   attach: {}, // project id -> files attached to the next message
-  notesQ: '',
-  noteOpen: null,
-  noteBodies: {},
 };
 const OPEN_STATUSES = ['new', 'routed', 'error', 'done'];
 
 // ---------- data loading ----------
 async function load(view) {
   const d = S.data;
+  // Composite sections load the data of their open segment.
+  if (view === 'home') return loadHome(d);
+  if (view === 'sessions') {
+    api('/api/home').then((h) => { d.home = h; }).catch(() => {});
+    if (segOf('sessions') === 'schedule') return load('tasks');
+  }
+  if (view === 'money') {
+    const seg = segOf('money');
+    await Promise.all([load('finance'), seg !== 'finance' ? load(seg) : null]);
+    return;
+  }
+  if (view === 'reach') return load(segOf('reach'));
+  if (view === 'people') {
+    [d.inboxAll, d.contacts, d.projects, d.inboxRules] = await Promise.all([api('/api/inbox?filter=all'), api('/api/contacts'), api('/api/projects'), api('/api/inbox-rules').catch(() => [])]);
+    return;
+  }
+  if (view === 'system') { d.log = await api('/api/log').catch(() => []); return; }
   if (view === 'inbox') [d.inbox, d.projects, d.inboxRules] = await Promise.all([api(`/api/inbox?filter=${S.inboxFilter}`), api('/api/projects'), api('/api/inbox-rules').catch(() => [])]);
   if (view === 'sessions') {
     const want = S.project;
@@ -205,7 +236,7 @@ async function load(view) {
   if (view === 'people') [d.contacts, d.projects] = await Promise.all([api('/api/contacts'), api('/api/projects')]);
   if (view === 'log') d.log = await api('/api/log');
   if (MOD_VIEWS[view]?.load) {
-    try { await MOD_VIEWS[view].load(d); d[`${view}Error`] = null; } catch (e) { d[`${view}Error`] = e.message; }
+    try { await MOD_VIEWS[view].load(d, view); d[`${view}Error`] = null; } catch (e) { d[`${view}Error`] = e.message; }
   }
   if (view === 'finance') {
     try { d.finance = await api('/api/finance'); d.financeError = null; } catch (e) { d.financeError = e.message; }
@@ -223,9 +254,6 @@ async function load(view) {
   }
   if (view === 'memory') {
     try { d.memory = await api('/api/memory'); d.memoryError = null; } catch (e) { d.memoryError = e.message; }
-  }
-  if (view === 'notes') {
-    try { d.notes = await api(`/api/notes?q=${encodeURIComponent(S.notesQ || '')}`); d.notesError = null; } catch (e) { d.notesError = e.message; }
   }
 }
 
@@ -254,7 +282,13 @@ async function refresh() {
     const [st] = await Promise.all([api('/api/state'), load(view)]);
     S.state = st;
     // A module's tab opened before its script arrived: load its data now.
-    if (await ensureModules(st.modules) && MOD_VIEWS[view]) await load(view);
+    if (await ensureModules(st.modules)) {
+      // A saved module id (old link) points into its section now that the module is known.
+      if (LEGACY[S.view]) { S.view = resolveView(S.view); localStorage.setItem('mf_view', S.view); }
+      await load(S.view);
+    }
+    // An id nobody knows (a module that is not installed here): open the home screen.
+    if (!VIEWS.some((v) => v.id === S.view)) { S.view = 'home'; localStorage.setItem('mf_view', 'home'); await load('home'); }
     S.authFailed = false;
     loadedViews.add(view);
     render();
@@ -295,7 +329,7 @@ async function refreshChatOnly() {
 
 // Live updates over a streamed fetch (EventSource cannot send our auth headers).
 // Internal bookkeeping (feed position, journal lines) must not redraw the page every second.
-const VIEW_EVENTS = { inbox: ['inbox', 'project'], sessions: ['project', 'run', 'run_event'], tasks: ['task', 'project'], people: ['contact', 'project'], log: ['log'], system: ['telegram', 'tunnel', 'mail'], social: ['social', 'content'], memory: ['memory'], finance: ['finance'] };
+const VIEW_EVENTS = { home: ['run', 'memory', 'inbox', 'finance', 'task'], money: ['finance'], reach: ['social', 'content'], inbox: ['inbox', 'project'], sessions: ['project', 'run', 'run_event', 'task'], tasks: ['task', 'project'], people: ['contact', 'project', 'inbox'], log: ['log'], system: ['telegram', 'tunnel', 'mail'], social: ['social', 'content'], memory: ['memory'], finance: ['finance'] };
 function relevant(e) {
   if (e.type === 'kv') return ['paused', 'auth_error'].includes(e.id);
   if (e.type === 'run') return true; // counters and the "working" badge
@@ -332,7 +366,7 @@ async function stream() {
 
 // ---------- shell ----------
 function counts() {
-  return { inbox: S.state?.counts?.inbox || 0, sessions: S.state?.running?.length || 0 };
+  return { home: S.state?.counts?.inbox || 0, sessions: S.state?.running?.length || 0 };
 }
 
 function renderShell() {
@@ -408,9 +442,9 @@ function render() {
   }
   renderShell();
   renderBanner();
-  const views = { inbox: viewInbox, memory: viewMemory, social: viewSocial, finance: viewFinance, today: viewToday, notes: viewNotes, more: viewMore, sessions: viewSessions, tasks: viewTasks, people: viewPeople, log: viewLog, system: viewSystem };
+  const views = { home: viewHome, sessions: viewSessionsHost, money: viewMoney, reach: viewReach, memory: viewMemory, more: viewMore, people: viewPeopleMessages, system: viewSystemHost };
   const kept = keepInputs();
-  $('#view').innerHTML = (MOD_VIEWS[S.view]?.render || views[S.view] || viewInbox)();
+  $('#view').innerHTML = (MOD_VIEWS[S.view]?.render || views[S.view] || viewHome)();
   restoreInputs(kept);
   // Chat history opens on the latest messages.
   document.querySelectorAll('.history').forEach((h) => { h.scrollTop = h.scrollHeight; });
@@ -444,8 +478,15 @@ window.MF = {
     Object.assign(MOD_ACTIONS, def.actions || {});
     Object.assign(MOD_FORMS, def.forms || {});
     if (def.events) VIEW_EVENTS[def.id] = def.events;
+    if (def.section && SEGMENTS[def.section]) {
+      // A segment inside an existing section (a module's part of «Деньги» or «Рост»).
+      LEGACY[def.id] = [def.section, def.id];
+      if (!SEGMENTS[def.section].some(([k]) => k === def.id)) SEGMENTS[def.section].push([def.id, def.segTitle || def.title]);
+      if (def.events) VIEW_EVENTS[def.section] = [...new Set([...(VIEW_EVENTS[def.section] || []), ...def.events])];
+      return;
+    }
     if (!VIEWS.some((v) => v.id === def.id)) {
-      const at = VIEWS.findIndex((v) => v.id === 'tasks');
+      const at = VIEWS.findIndex((v) => v.id === 'more');
       VIEWS.splice(at < 0 ? VIEWS.length : at, 0, { id: def.id, title: def.title, icon: def.icon || 'spark', more: def.more || def.title });
       MORE_VIEWS.push(def.id);
     }
@@ -789,29 +830,6 @@ function viewToday() {
     </div>`;
 }
 
-// ---------- notes ----------
-function notesList() {
-  if (S.data.notesError) return `<div class="empty">${esc(S.data.notesError)}</div>`;
-  const notes = S.data.notes || [];
-  if (!notes.length) return `<div class="empty">${S.notesQ ? 'Ничего не нашёл' : 'Заметок нет'}</div>`;
-  return notes.map((n) => {
-    const open = S.noteOpen === n.id;
-    const body = S.noteBodies[n.id];
-    return `<div class="note ${open ? 'open' : ''}">
-      <button class="note-head" data-note="${esc(n.id)}"><span class="grow"><span class="li-title">${esc(n.title)}</span><span class="li-sub" style="display:block">${esc(n.folder)}</span></span>${icon(open ? 'back' : 'note')}</button>
-      ${open ? `<div class="note-body">${body === undefined ? '<span class="faint">Загружаю…</span>' : `<div class="clamp" style="--lines:30">${esc(body || '(пусто)')}</div>`}
-        ${body ? `<div class="row" style="margin-top:8px"><button class="btn small" data-copy="${esc(body)}">${icon('copy')}Скопировать</button></div>` : ''}</div>` : ''}
-    </div>`;
-  }).join('');
-}
-
-function viewNotes() {
-  return `<div class="page-head"><div><h1>Заметки</h1><p>Apple Заметки. Поиск по заголовку и тексту, без расхода подписки.</p></div>
-    <button class="btn small primary" data-action="new-note">${icon('plus')}Заметка</button></div>
-    <div class="search-box">${icon('search')}<input class="input" data-notes-search placeholder="Поиск по заметкам" value="${esc(S.notesQ)}" autocomplete="off"></div>
-    <div class="card raised list notes-list" id="notes-list" style="padding:0">${notesList()}</div>`;
-}
-
 // ---------- social ----------
 const NET = { instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', facebook: 'Facebook', telegram: 'Telegram', twitter: 'X', linkedin: 'LinkedIn' };
 const num = (n) => (typeof n === 'number' ? n.toLocaleString('ru') : '—');
@@ -884,7 +902,7 @@ function socialOverview() {
 }
 
 
-// ---------- social: tabs (overview, studio, calendar, ideas, sales, rivals) ----------
+// ---------- social: tabs (overview, studio, calendar, ideas, rivals) ----------
 const SOC_TABS = [['overview', 'Обзор'], ['studio', 'Студия'], ['calendar', 'Календарь'], ['ideas', 'Идеи'], ['rivals', 'Конкуренты']];
 const PST = { draft: ['черновик', ''], sending: ['отправляю…', 'info'], scheduled: ['запланирован', 'accent'], metricool_draft: ['черновик в Metricool', 'warn'], published: ['вышел', 'ok'], failed: ['ошибка', 'bad'] };
 const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
@@ -1157,6 +1175,160 @@ function viewFinance() {
 // ---------- more (phone) ----------
 function viewMore() {
   return `<div class="card raised list" style="padding:0">${VIEWS.filter((v) => v.more).map((v) => `<button class="more-item" data-nav="${v.id}">${icon(v.icon)}<span class="grow"><span class="li-title">${v.title}</span><span class="li-sub" style="display:block">${v.more}</span></span>${icon('back')}</button>`).join('')}</div>`;
+}
+
+const saveSeg = () => { try { localStorage.setItem('mf_seg', JSON.stringify(SEG)); } catch { /* private mode */ } };
+// Segment switch at the top of a section; hidden when the section has only one part.
+function segBar(host) {
+  const list = SEGMENTS[host] || [];
+  if (list.length < 2) return '';
+  const cur = segOf(host);
+  return `<div class="seg seg-main">${list.map(([k, l]) => `<button class="${cur === k ? 'on' : ''}" data-seg="${host}:${k}">${esc(l)}</button>`).join('')}</div>`;
+}
+// Modules can put one summary tile on the home screen: summary(data) → { icon, title, value, note, nav }.
+const homeMods = () => Object.values(MOD_VIEWS).filter((m) => m.summary);
+
+// ---------- home: one screen with what matters now ----------
+async function loadHome(d) {
+  const mods = homeMods();
+  const [home, finance] = await Promise.all([
+    api('/api/home').catch((e) => ({ error: e.message })),
+    api('/api/finance').catch(() => null),
+    ...mods.map((m) => (m.homeLoad || m.load)?.(d, m.id)?.catch?.(() => {})),
+  ]);
+  d.home = home; d.finance = finance || d.finance;
+  // The calendar lives on the Mac: it comes when it comes, the screen does not wait for it.
+  if (!d.agendaAt || Date.now() - d.agendaAt > 5 * 60000) {
+    d.agendaAt = Date.now();
+    api('/api/agenda').then((a) => { d.agenda = a; d.agendaError = null; if (S.view === 'home') render(); }).catch((e) => { d.agendaError = e.message; });
+  }
+}
+
+function moneyNow(f) {
+  if (!f) return null;
+  const base = S.state?.currency || 'RUB';
+  const r = f.rates?.base || f.rates?.rub || {};
+  const toBase = (n, c) => (r[c] ? n * r[c] : 0);
+  const sum = (rows) => (rows || []).reduce((a, x) => a + toBase(x.total, x.currency), 0);
+  const cap = (f.balances || []).reduce((a, b) => a + toBase(b.amount, b.currency), 0);
+  const fmt = (n) => `${Math.round(n).toLocaleString('ru')} ${CUR[base] || base}`;
+  return { cap: f.balances?.length ? `≈ ${fmt(cap)}` : null, today: fmt(sum(f.today)), month: fmt(sum(f.month)), accounts: f.balances?.length || 0 };
+}
+
+function runCard(r) {
+  const p = r.progress || {};
+  const pct = p.m ? Math.round((p.n / p.m) * 100) : null;
+  return `<div class="run-item">
+    <div class="row"><span class="dot ${r.status === 'running' ? 'live' : ''}"></span><b class="grow clamp" style="--lines:1">${esc(r.project)}</b><span class="faint">${r.status === 'queued' ? 'в очереди' : when(r.started_at)}</span>
+      <button class="icon-btn" data-action="run-stop" data-id="${r.id}" aria-label="Отменить" title="Отменить">${icon('stop')}</button></div>
+    <div class="faint clamp" style="--lines:2">${esc(r.prompt)}</div>
+    ${pct != null ? `<div class="run-bar"><i style="width:${pct}%"></i></div><div class="run-sub"><b>${p.n} из ${p.m}</b> · ${esc(String(p.text).replace(/^\s*\d+\s*\/\s*\d+\s*(готово|сделано|done)?\s*[:.,-]?\s*/i, ''))}</div>`
+      : `<div class="run-sub faint">${r.status === 'queued' ? 'начнётся, когда освободится сессия' : p.steps ? `шаг ${p.steps}` : 'начинаю'}</div>`}
+  </div>`;
+}
+
+function viewHome() {
+  const d = S.data;
+  const h = d.home;
+  const m = moneyNow(d.finance);
+  const sums = homeMods().map((x) => { try { return x.summary(d); } catch { return null; } }).filter((x) => x && x.title);
+  const tiles = [
+    m ? { icon: '🧾', title: 'Сегодня', sub: 'траты', value: m.today, nav: 'money' } : null,
+    m ? { icon: '📅', title: 'Месяц', sub: 'траты', value: m.month, nav: 'money' } : null,
+  ].filter(Boolean);
+  const top = hero({ label: 'Деньги', tone: 'green', value: m?.cap || (m ? 'Счета не заданы' : 'Загружаю…'), note: m?.cap ? `по ${plural(m.accounts, 'счёту', 'счетам', 'счетам')}, в основной валюте` : m ? 'пришли скриншот банка в бот, и остаток появится здесь' : '', tiles });
+  const running = h?.running || [];
+  const work = `<section class="card raised"><div class="sec-title">${icon('sessions')}Сейчас в работе${running.length ? ` <span class="badge accent">${running.length}</span>` : ''}</div>
+    ${running.length ? running.map(runCard).join('') : '<div class="faint">Сейчас ничего не идёт</div>'}</section>`;
+  const wait = [];
+  for (const a of h?.asked || []) {
+    wait.push(`<div class="wait-item"><div class="row"><span class="badge">${esc(a.project)}</span><span class="faint">${when(a.at)}</span></div>
+      <div class="clamp" style="--lines:2">${esc(a.question || a.title)}</div>
+      <div class="chips">${a.choices.map((c) => `<button class="chip-btn" data-action="home-answer" data-id="${a.project_id}" data-text="${esc(c)}">${esc(c)}</button>`).join('')}</div></div>`);
+  }
+  if (h?.pendingMemory?.length) wait.push(`<button class="wait-item tap" data-nav="memory"><div class="row"><span class="badge accent">память</span><b class="grow">${plural(h.pendingMemory.length, 'заметка ждёт', 'заметки ждут', 'заметок ждут')} проверки</b>${icon('back')}</div><div class="faint clamp" style="--lines:1">${esc(h.pendingMemory.map((n) => n.title).join(', '))}</div></button>`);
+  if (h?.inboxOpen) wait.push(`<button class="wait-item tap" data-nav="people"><div class="row"><span class="badge info">сообщения</span><b class="grow">${plural(h.inboxOpen, 'сообщение ждёт', 'сообщения ждут', 'сообщений ждут')} решения</b>${icon('back')}</div></button>`);
+  const waitBlock = `<section class="card raised"><div class="sec-title">${icon('check')}Ждёт тебя${wait.length ? ` <span class="badge accent">${wait.length}</span>` : ''}</div>${wait.join('') || '<div class="faint">Ничего не ждёт ✨</div>'}</section>`;
+  const a = d.agenda;
+  const today = new Date().toDateString();
+  const evs = (a?.events || []).filter((e) => e.start && new Date(e.start).toDateString() === today);
+  const rems = (a?.reminders || []).slice(0, 5);
+  const agendaBlock = evs.length || rems.length ? `<section class="card raised"><div class="sec-title">${icon('calendar')}Сегодня</div>
+    ${evs.map((e) => `<div class="ev ${eventNow(e) ? 'now' : ''}"><span class="ev-time">${esc(e.time || 'весь день')}</span><span class="ev-title">${esc(e.title)}</span></div>`).join('')}
+    ${rems.map((r) => `<div class="rem ${r.kind}"><button class="check" data-action="complete-reminder" data-id="${esc(r.id)}" aria-label="Выполнено"></button><span class="grow">${esc(r.title)}</span></div>`).join('')}</section>` : '';
+  const modBlock = sums.length ? `<section class="mod-sums">${sums.map((x) => `<button class="mod-sum" ${x.nav ? `data-nav="${esc(x.nav)}"` : ''}><span class="ms-t">${esc(x.icon || '•')} ${esc(x.title)}</span><b class="ms-v">${esc(String(x.value ?? '·'))}</b>${x.note ? `<span class="ms-n">${esc(x.note)}</span>` : ''}</button>`).join('')}</section>` : '';
+  return `${top}${modBlock}${work}${waitBlock}${agendaBlock}`;
+}
+
+// ---------- sections with segments ----------
+function viewSessionsHost() {
+  const seg = segOf('sessions');
+  if (seg === 'schedule') return `${segBar('sessions')}${viewTasks()}`;
+  // Background work with progress above the chats (not inside an open chat).
+  const running = S.detail ? [] : (S.data.home?.running || []);
+  const work = running.length ? `<section class="card raised"><div class="sec-title">${icon('sessions')}Сейчас в работе <span class="badge accent">${running.length}</span></div>${running.map(runCard).join('')}</section>` : '';
+  return `${S.detail ? '' : segBar('sessions')}${work}${viewSessions()}`;
+}
+function viewMoney() {
+  const seg = segOf('money');
+  const body = seg === 'finance' ? viewFinance() : (MOD_VIEWS[seg]?.render?.() || viewFinance());
+  return `${segBar('money')}${body}`;
+}
+function viewReach() {
+  const seg = segOf('reach');
+  const body = seg === 'social' ? viewSocial() : (MOD_VIEWS[seg]?.render?.() || viewSocial());
+  return `${segBar('reach')}${body}`;
+}
+
+// ---------- people and messages: search, the latest messages, contacts folded ----------
+// A plain line: who, when, what. Decisions are made in the bot, not here.
+function messageRow(i) {
+  const mail = mailParts(i);
+  return `<article class="msg compact li">
+    <div class="avatar">${mail ? icon('mail') : esc(initials(i.name))}</div>
+    <div class="li-main">
+      <div class="msg-head"><span class="msg-name">${esc(i.name || i.chat_id)}</span><span class="grow"></span><span class="faint">${when(i.created_at)}</span></div>
+      <div class="msg-text clamp" data-key="m${i.id}">${esc(mail ? `${mail.subject} · ${mail.body}` : i.text)}</div>
+    </div>
+  </article>`;
+}
+function viewPeopleMessages() {
+  const d = S.data;
+  const head = `<div class="page-head"><div><h1>Люди и сообщения</h1><p>Кто что писал: поиск по всей переписке и последние сообщения.</p></div></div>`;
+  const search = `<section class="card raised">
+    <form class="row mem-search" data-form="recall"><input class="input grow" name="q" placeholder="Например: Аня договор" value="${esc(S.recallQ || '')}" autocomplete="off"><button class="btn primary small">${icon('search')}Найти</button></form>
+    ${S.recallRes ? `<div class="recall-list">${S.recallRes.length ? S.recallRes.map((r) => `<div class="recall-item">
+        <div class="row"><span class="badge">${MEM_KIND[r.kind] || r.kind}</span><span class="faint">${r.at ? new Date(r.at).toLocaleDateString('ru', { day: 'numeric', month: 'short' }) : ''}</span><b class="grow clamp" style="--lines:1">${esc(r.title)}</b>
+          <button class="btn small ghost" data-action="recall-open" data-id="${esc(r.ref)}">${S.recallOpen?.ref === r.ref ? 'Свернуть' : 'Открыть'}</button></div>
+        <div class="recall-snip">${hl(r.snip)}</div>
+        ${S.recallOpen?.ref === r.ref ? `<div class="recall-full">${esc(S.recallOpen.body)}</div>` : ''}</div>`).join('') : '<div class="empty">Ничего не нашлось.</div>'}</div>` : ''}
+  </section>`;
+  const items = (d.inboxAll || []).slice(0, 40);
+  const latest = `<div class="section-label">Последние сообщения</div><div class="card list" style="padding:0">${items.length ? items.map(messageRow).join('') : '<div class="faint" style="padding:12px">Пока пусто</div>'}</div>`;
+  const people = viewPeople().replace(/<div class="page-head">[\s\S]*?<\/div><\/div>/, '');
+  return `${head}${search}${latest}
+    <details class="card raised fold"><summary class="sec-title">${icon('people')}Люди: проекты и режимы</summary>${people}</details>
+    ${rulesBlock()}`;
+}
+
+// ---------- system: one light, details on tap ----------
+function viewSystemHost() {
+  const st = S.state;
+  if (!st) return PH;
+  const checks = [
+    ['Claude', !st.authError],
+    ['Telegram', !st.telegram.enabled || ['running', 'external'].includes(st.telegram.process)],
+    ['Бот', !st.bot.configured || st.bot.status === 'running'],
+    ['Почта', !st.mail?.enabled || st.mail.status !== 'error'],
+    ['Голосовые', st.voice?.status !== 'down' && st.voice?.status !== 'error'],
+  ];
+  const bad = checks.filter((c) => !c[1]).map((c) => c[0]);
+  const lamp = st.authError || bad.includes('Бот') ? 'bad' : bad.length || st.paused ? 'warn' : 'ok';
+  const text = lamp === 'ok' ? 'Всё работает' : st.paused && !bad.length ? 'Автоматика на паузе' : `Нужна проверка: ${bad.join(', ')}`;
+  return `<div class="page-head"><div><h1>Система</h1></div></div>
+    <section class="card raised sys-lamp"><span class="lamp ${lamp}"></span><div class="grow"><b>${esc(text)}</b><div class="faint">${st.running.length ? `в работе ${st.running.length}` : 'сейчас тихо'} · ${st.paused ? 'автоматика на паузе' : 'автоматика включена'}</div></div></section>
+    <details class="card raised fold"><summary class="sec-title">${icon('system')}Подключения и настройки</summary>${viewSystem()}</details>
+    <details class="card raised fold"><summary class="sec-title">${icon('log')}Журнал</summary>${viewLog()}</details>`;
 }
 
 const PRESETS = [
@@ -1504,18 +1676,9 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('[data-nav],[data-action],[data-project],[data-inbox-filter],[data-log-filter],[data-contact-mode],[data-copy],[data-open-project],[data-panel],[data-tg-link],[data-note]');
+  const el = e.target.closest('[data-nav],[data-seg],[data-action],[data-project],[data-inbox-filter],[data-log-filter],[data-contact-mode],[data-copy],[data-open-project],[data-panel],[data-tg-link]');
   if (!el) return;
   const { dataset: d } = el;
-  if (d.note) {
-    S.noteOpen = S.noteOpen === d.note ? null : d.note;
-    $('#notes-list').innerHTML = notesList();
-    if (S.noteOpen && S.noteBodies[d.note] === undefined) {
-      try { S.noteBodies[d.note] = (await api(`/api/notes/body?id=${encodeURIComponent(d.note)}`)).body; } catch (err) { S.noteBodies[d.note] = `Не открылась: ${err.message}`; }
-      if ($('#notes-list')) $('#notes-list').innerHTML = notesList();
-    }
-    return;
-  }
   if (d.tgLink) {
     if (inTelegram && tg.openTelegramLink) { e.preventDefault(); tg.openTelegramLink(d.tgLink); }
     return;
@@ -1529,7 +1692,7 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (d.nav) {
-    S.view = d.nav; S.detail = false; localStorage.setItem('mf_view', d.nav);
+    S.view = resolveView(d.nav); S.detail = false; localStorage.setItem('mf_view', S.view); saveSeg();
     window.scrollTo(0, 0);
     instant();
     return refresh();
@@ -1538,6 +1701,7 @@ document.addEventListener('click', async (e) => {
   if (d.openProject) { S.view = 'sessions'; S.project = Number(d.openProject); S.detail = true; instant({ fresh: true }); return refresh(); }
   if (d.inboxFilter) { S.inboxFilter = d.inboxFilter; instant(); return refresh(); }
   if (d.logFilter) { S.logFilter = d.logFilter; return render(); }
+  if (d.seg) { const [host, id] = d.seg.split(':'); SEG[host] = id; saveSeg(); window.scrollTo(0, 0); instant({ fresh: true }); return refresh(); }
   if (d.copy) { await navigator.clipboard.writeText(d.copy).catch(() => {}); return toast('Скопировано'); }
   if (d.contactMode) return act(() => api(`/api/contacts/${encodeURIComponent(d.contactMode)}`, { method: 'PATCH', body: { mode: d.mode, project_id: Number($(`[data-contact-project="${CSS.escape(d.contactMode)}"]`).value) || null } }));
 
@@ -1672,6 +1836,12 @@ document.addEventListener('click', async (e) => {
       break;
     }
     case 'run-task': await act(() => api(`/api/tasks/${id}/run`, { method: 'POST' }), 'Запущено'); break;
+    case 'run-stop': if (await ask('Отменить эту задачу?')) await act(() => api(`/api/runs/${id}/stop`, { method: 'POST' }), 'Отменено'); break;
+    case 'home-answer': {
+      const out = await act(() => api(`/api/projects/${id}/message`, { method: 'POST', body: { prompt: el.dataset.text } }), 'Ответ ушёл в сессию');
+      if (out) { S.view = 'sessions'; SEG.sessions = 'chats'; saveSeg(); S.project = Number(id); S.detail = true; localStorage.setItem('mf_view', 'sessions'); instant({ fresh: true }); await refresh(); }
+      break;
+    }
     case 'delete-task': if (await ask('Удалить задачу?')) await act(() => api(`/api/tasks/${id}`, { method: 'DELETE' }), 'Удалено'); break;
     default: if (MOD_ACTIONS[d.action]) await MOD_ACTIONS[d.action](id, el); break;
   }
@@ -1683,18 +1853,6 @@ document.addEventListener('change', (e) => {
     const mode = $(`[data-contact-mode="${CSS.escape(cp)}"].on`)?.dataset.mode || 'ask';
     act(() => api(`/api/contacts/${encodeURIComponent(cp)}`, { method: 'PATCH', body: { mode, project_id: Number(e.target.value) || null } }), 'Сохранено');
   }
-});
-
-// Notes search: redraw only the list so the field keeps focus.
-let notesTimer = null;
-document.addEventListener('input', (e) => {
-  if (e.target.dataset?.notesSearch === undefined) return;
-  clearTimeout(notesTimer);
-  notesTimer = setTimeout(async () => {
-    S.notesQ = e.target.value.trim();
-    try { S.data.notes = await api(`/api/notes?q=${encodeURIComponent(S.notesQ)}`); S.data.notesError = null; } catch (err) { S.data.notesError = err.message; }
-    if ($('#notes-list')) $('#notes-list').innerHTML = notesList();
-  }, 300);
 });
 
 // Manual expense from the Finance view.
