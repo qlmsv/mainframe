@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Настройка помощника</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="setup.css">
+<script src="/spark.js" defer></script>
+<script src="setup.js" defer></script>
+</head>
+<body>
+<main id="app">
+  <header class="top">
+    <mf-spark id="spark" size="56" state="waiting"></mf-spark>
+    <div>
+      <h1>Настройка помощника</h1>
+      <div class="steps" id="steps"></div>
+    </div>
+  </header>
+
+  <!-- 0. Вход -->
+  <section data-step="login">
+    <h2>Введи свою фразу</h2>
+    <p>Это фраза, которую ты вписал в строку <code>SETUP_CODE</code>, когда создавал сервер. Она нужна, чтобы настроить помощника мог только ты.</p>
+    <form data-form="login">
+      <input name="code" type="password" autocomplete="off" placeholder="Твоя фраза" required>
+      <button>Войти</button>
+    </form>
+  </section>
+
+  <!-- 0.5 Где работает -->
+  <section data-step="mode" hidden>
+    <h2>Где будет работать помощник</h2>
+    <p>Можно поменять потом в пульте: Ещё → Система.</p>
+    <div class="choice" id="modeCards"></div>
+    <div id="modeInfo"></div>
+    <button type="button" data-act="mode">Дальше</button>
+  </section>
+
+  <!-- 1. О тебе -->
+  <section data-step="profile" hidden>
+    <h2>Как тебя зовут</h2>
+    <form data-form="profile">
+      <label>Имя<input name="name" placeholder="Например, Анна" required maxlength="60"></label>
+      <label>Часовой пояс<select name="tz" id="tz"></select></label>
+      <label class="check"><input type="checkbox" name="russia" id="russia"> <span><b>Я из России</b><small>Предложу модели, которые работают из России</small></span></label>
+      <button>Дальше</button>
+    </form>
+  </section>
+
+  <!-- 2. Модель -->
+  <section data-step="model" hidden>
+    <h2>Какой ИИ будет работать</h2>
+    <div class="choice" id="choice">
+      <button type="button" class="card" data-pick="claude"><b>Claude по подписке</b><small>Нужна подписка Claude Pro или Max (от 20 $ в месяц). Лучшее качество.</small></button>
+      <button type="button" class="card" data-pick="key"><b>Другой сервис по ключу</b><small id="keyHint">GLM, Kimi, DeepSeek, OpenRouter и другие. Платишь за использование.</small></button>
+    </div>
+
+    <div id="claudeBox" hidden>
+      <ol class="how">
+        <li>Нажми кнопку ниже. Откроется сайт Claude: войди и нажми «Authorize».</li>
+        <li>Claude покажет код. Скопируй его и вставь сюда.</li>
+      </ol>
+      <button type="button" data-act="claude-start">Войти в Claude</button>
+      <a id="claudeLink" class="big-link" target="_blank" rel="noopener" hidden>Открыть вход в Claude ↗</a>
+      <details class="alt"><summary>Уже есть токен Claude?</summary>
+        <form data-form="claude-token"><input name="token" autocomplete="off" placeholder="sk-ant-oat01-…" required><button>Сохранить токен</button></form>
+        <p class="hint">Токен выдаёт команда <code>claude setup-token</code> на любом компьютере, где стоит Claude Code.</p>
+      </details>
+      <form data-form="claude-code" id="claudeCode" hidden>
+        <input name="code" autocomplete="off" placeholder="Вставь код от Claude" required>
+        <button>Готово</button>
+      </form>
+    </div>
+
+    <div id="keyBox" hidden>
+      <form data-form="model">
+        <label>Сервис<select name="provider" id="provider"></select></label>
+        <p class="hint" id="providerHint"></p>
+        <label id="baseRow" hidden>Адрес API<input name="baseUrl" placeholder="https://…/anthropic"></label>
+        <label>Ключ<input name="key" type="password" autocomplete="off" placeholder="Вставь ключ сервиса" required></label>
+        <label id="mainRow" hidden>Модель<input name="main" placeholder="Название модели"></label>
+        <button>Проверить и сохранить</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- 3. Бот -->
+  <section data-step="bot" hidden>
+    <h2>Свой бот в Telegram</h2>
+    <p>Через бота ты будешь писать помощнику. Бот делается за минуту у официального бота Telegram, он называется <b>@BotFather</b>.</p>
+    <div class="chat" aria-label="Как это выглядит">
+      <div class="chat-head"><span class="ava">BF</span><b>BotFather</b><small>бот</small></div>
+      <div class="msg me">/newbot</div>
+      <div class="msg">Alright, a new bot. How are we going to call it?</div>
+      <div class="msg me">Мой помощник</div>
+      <div class="msg">Good. Now let's choose a username for your bot. It must end in `bot`.</div>
+      <div class="msg me">anna_helper_bot</div>
+      <div class="msg">Done! … Use this token to access the HTTP API:<br><span class="token">7412345678:AAH3k9…xYz</span></div>
+    </div>
+    <ol class="how">
+      <li><a href="https://t.me/BotFather" target="_blank" rel="noopener">Открой @BotFather</a> и нажми «Start».</li>
+      <li>Отправь <code>/newbot</code>.</li>
+      <li>Придумай имя (любое) и адрес, который кончается на <code>bot</code>.</li>
+      <li>Скопируй токен (выделен оранжевым на картинке) и вставь сюда. Это пароль от бота, никому его не показывай.</li>
+    </ol>
+    <form data-form="bot">
+      <input name="token" autocomplete="off" placeholder="1234567890:AAH…" required>
+      <button>Подключить бота</button>
+    </form>
+  </section>
+
+  <!-- 3.5 Почта и Google (по желанию) -->
+  <section data-step="connect" hidden>
+    <h2>Почта и Google</h2>
+    <p>По желанию, можно позже в пульте. Работает с любым ИИ. Пароли хранятся только на твоём сервере.</p>
+
+    <h3>Почта</h3>
+    <p class="ok-line" id="mailOk" hidden></p>
+    <form data-form="mail" id="mailForm">
+      <label>Адрес<input name="address" type="email" placeholder="you@yandex.ru" required></label>
+      <p class="hint" id="mailHint">Подходит любая почта: Gmail, Яндекс, Mail.ru, iCloud, своя на домене.</p>
+      <label>Пароль приложения<input name="password" type="password" autocomplete="off" placeholder="не обычный пароль, а пароль приложения" required></label>
+      <div id="mailServers" hidden>
+        <label>Сервер IMAP<input name="imap" placeholder="imap.example.com:993"></label>
+        <label>Сервер SMTP<input name="smtp" placeholder="smtp.example.com:465"></label>
+      </div>
+      <button>Проверить и подключить</button>
+    </form>
+
+    <h3>Google Календарь и Диск</h3>
+    <p class="ok-line" id="googleOk" hidden></p>
+    <div id="googleBox">
+      <ol class="how">
+        <li>Открой <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud</a> и создай проект (любое имя).</li>
+        <li>Включи API: <a href="https://console.cloud.google.com/flows/enableapi?apiid=calendar-json.googleapis.com,drive.googleapis.com,docs.googleapis.com,sheets.googleapis.com" target="_blank" rel="noopener">Календарь, Диск, Документы, Таблицы</a>, нажми «Enable».</li>
+        <li><a href="https://console.cloud.google.com/auth/branding" target="_blank" rel="noopener">Экран входа</a>: «Get started», имя приложения, твоя почта, тип «External». Потом в «Audience» нажми <b>«Publish app»</b>, иначе вход слетает через 7 дней.</li>
+        <li><a href="https://console.cloud.google.com/auth/clients/create" target="_blank" rel="noopener">Создай клиент</a>: тип <b>«Desktop app»</b>. Скопируй Client ID и Client secret сюда.</li>
+      </ol>
+      <form data-form="google-client" id="googleClient">
+        <input name="clientId" placeholder="Client ID: 1234-abc.apps.googleusercontent.com" required>
+        <input name="clientSecret" type="password" autocomplete="off" placeholder="Client secret" required>
+        <button>Сохранить</button>
+      </form>
+      <div id="googleLogin" hidden>
+        <ol class="how">
+          <li>Нажми кнопку, выбери аккаунт. Google предупредит, что приложение не проверено: «Дополнительные настройки» → «Перейти». Разреши доступ.</li>
+          <li>Откроется пустая страница с ошибкой, это нормально. <b>Скопируй её адрес</b> целиком (начинается с http://127.0.0.1:8085) и вставь сюда.</li>
+        </ol>
+        <button type="button" data-act="google-start">Войти в Google</button>
+        <a id="googleLink" class="big-link" target="_blank" rel="noopener" hidden>Открыть вход в Google ↗</a>
+        <form data-form="google-finish"><input name="pasted" autocomplete="off" placeholder="http://127.0.0.1:8085/?state=…&code=…" required><button>Готово</button></form>
+      </div>
+    </div>
+    <button type="button" class="secondary" data-act="connect-done">Дальше</button>
+  </section>
+
+  <!-- 4. Готово -->
+  <section data-step="finish" hidden>
+    <h2>Всё готово</h2>
+    <ul class="done" id="summary"></ul>
+    <button type="button" data-act="finish">Запустить помощника</button>
+  </section>
+
+  <section data-step="launched" hidden>
+    <h2>Помощник запущен</h2>
+    <p>Последний шаг: открой бота и нажми «Start». Он поздоровается и задаст около 10 коротких вопросов, чтобы познакомиться. Отвечай как другу, можно голосом.</p>
+    <a id="botLink" class="big-link primary" target="_blank" rel="noopener">Открыть бота</a>
+    <p class="hint">Пульт помощника в браузере (личная ссылка, никому не пересылай):</p>
+    <a id="dashLink" class="big-link" target="_blank" rel="noopener">Открыть пульт</a>
+    <div id="bridgeBox" hidden>
+      <h3>Подключи компьютер</h3>
+      <p>Выполни одну команду на компьютере, который будет помогать серверу. Команда действует час.</p>
+      <p class="hint"><b>Mac</b>: программа «Терминал»</p>
+      <pre class="cmd" id="cmdMac"></pre>
+      <p class="hint"><b>Windows</b>: Пуск → PowerShell</p>
+      <pre class="cmd" id="cmdWin"></pre>
+      <p class="hint">Новую команду можно взять в пульте: Ещё → Система → Компьютер.</p>
+    </div>
+    <p class="hint">Эта страница настройки больше не откроется: она выключилась сама.</p>
+  </section>
+
+  <p class="err" id="err" role="alert" hidden></p>
+</main>
+</body>
+</html>

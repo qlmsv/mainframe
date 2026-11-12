@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 380" font-family="Segoe UI, -apple-system, Arial, sans-serif">
+  <rect width="640" height="380" fill="#e6ebee"/>
+  <rect x="0" y="0" width="640" height="48" fill="#fff"/>
+  <circle cx="34" cy="24" r="16" fill="#3e9be0"/><text x="25" y="29" fill="#fff" font-size="12" font-weight="700">BF</text>
+  <text x="60" y="22" font-size="15" font-weight="600" fill="#111">BotFather</text><text x="60" y="38" font-size="12" fill="#888">бот</text>
+  <rect x="440" y="62" width="180" height="34" rx="14" fill="#e1f7cb"/><text x="530" y="84" font-size="14" text-anchor="middle" fill="#111">/newbot</text>
+  <rect x="20" y="106" width="400" height="34" rx="14" fill="#fff"/><text x="34" y="128" font-size="13" fill="#111">Alright, a new bot. How are we going to call it?</text>
+  <rect x="440" y="150" width="180" height="34" rx="14" fill="#e1f7cb"/><text x="530" y="172" font-size="14" text-anchor="middle" fill="#111">Мой помощник</text>
+  <rect x="20" y="194" width="400" height="34" rx="14" fill="#fff"/><text x="34" y="216" font-size="13" fill="#111">Now choose a username. It must end in `bot`.</text>
+  <rect x="440" y="238" width="180" height="34" rx="14" fill="#e1f7cb"/><text x="530" y="260" font-size="14" text-anchor="middle" fill="#111">anna_helper_bot</text>
+  <rect x="20" y="282" width="460" height="62" rx="14" fill="#fff"/>
+  <text x="34" y="304" font-size="13" fill="#111">Done! Use this token to access the HTTP API:</text>
+  <rect x="32" y="314" width="300" height="22" rx="5" fill="#e2602b"/><text x="40" y="330" font-size="13" fill="#fff" font-family="Consolas, monospace">7412345678:AAH3k9pQ…xYz</text>
+  <text x="350" y="330" font-size="13" fill="#e2602b" font-weight="700">← это ключ, скопируй</text>
+</svg>

@@ -11,10 +11,17 @@ MAC_ENV_FILE=${MAC_ENV_FILE:-\$HOME/.mainframe-mac/.env}
 q() { printf '%q' "$1"; }
 cmd="cd $(q "$PWD") || exit 97;"
 cmd+=' export PATH=/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin;'
-cmd+=" T=\$(grep '^CLAUDE_CODE_OAUTH_TOKEN=' $MAC_ENV_FILE | cut -d= -f2-); [ -n \"\$T\" ] && export CLAUDE_CODE_OAUTH_TOKEN=\$T;"
+# Another model provider (MODEL_PROVIDER, see src/models.js): its address and key come with the
+# session, and the Mac's Claude token is not used. Otherwise the Mac signs in to Claude as before.
+if [ -z "${ANTHROPIC_BASE_URL:-}" ]; then
+  cmd+=" T=\$(grep '^CLAUDE_CODE_OAUTH_TOKEN=' $MAC_ENV_FILE | cut -d= -f2-); [ -n \"\$T\" ] && export CLAUDE_CODE_OAUTH_TOKEN=\$T;"
+else
+  cmd+=" unset CLAUDE_CODE_OAUTH_TOKEN; export ANTHROPIC_API_KEY=$(q "${ANTHROPIC_API_KEY:-}");"
+fi
 for k in $(compgen -e); do
   case $k in
     CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY) ;;
+    API_TIMEOUT_MS|ENABLE_CLAUDEAI_MCP_SERVERS) cmd+=" export $k=$(q "${!k}");" ;;
     MAC_*) ;;
     CLAUDE_*|ANTHROPIC_*|MCP_*|DISABLE_*|MAX_THINKING_TOKENS) cmd+=" export $k=$(q "${!k}");" ;;
   esac

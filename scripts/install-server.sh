@@ -7,20 +7,39 @@
 # код в ~/mainframe, telegram-mcp, служба systemd. Потом по шагам спрашивает бота, имя, Telegram
 # и вход в Claude. Повторный запуск безопасен: уже сделанное пропускается.
 #
+# Проще всего: ключ бота одним словом после bash -s, всё остальное бот спросит сам в чате:
+#   curl -fsSL …/install-server.sh | bash -s КЛЮЧ_БОТА [КОД]
+#   (ключ из Telegram @BotFather или из MAX; КОД по желанию: тогда бот слушается только того, кто его пришлёт)
+# Без терминала со страницей настройки (для продвинутых): --unattended и фраза SETUP_CODE.
+#   Вопросов нет, в конце запускается мастер настройки в браузере: https://<ip>.sslip.io/setup
+#   Готовый текст для поля «cloud-init / user data»: scripts/cloud-init.sh
+#
 # Флаги для проверки на занятом сервере: --dir DIR --port PORT --service NAME --no-caddy --no-system
 set -euo pipefail
+export HOME="${HOME:-/root}"
 
-DIR="$HOME/mainframe"; PORT=7777; SERVICE=mainframe; CADDY=1; SYSTEM=1
+DIR="$HOME/mainframe"; PORT=7777; SERVICE=mainframe; CADDY=1; SYSTEM=1; UNATTENDED=0
 REPO_URL="${MAINFRAME_REPO:-https://github.com/qlmsv/mainframe.git}"
 TG_MCP_REPO="https://github.com/chigwell/telegram-mcp.git"; TG_MCP_COMMIT="1451ae7"
+ARGS=""; BOT_KEY="${BOT_KEY:-}"; OWNER_CODE="${OWNER_CODE:-}"
+VAL=0  # the next word is the value of --dir/--port/--service, not the bot key
+for a in "$@"; do
+  if [ "$VAL" = 1 ]; then ARGS="$ARGS $a"; VAL=0; continue; fi
+  case "$a" in --dir|--port|--service) ARGS="$ARGS $a"; VAL=1;; -*) ARGS="$ARGS $a";; *) if [ -z "$BOT_KEY" ]; then BOT_KEY="$a"; elif [ -z "$OWNER_CODE" ]; then OWNER_CODE="$a"; fi;; esac
+done
+# The bot key and the code never go on a command line: through private files to the mainframe user.
+[ -n "$BOT_KEY" ] && UNATTENDED_KEY=1 || UNATTENDED_KEY=0
 while [ $# -gt 0 ]; do case "$1" in
   --dir) DIR="$2"; shift 2;; --port) PORT="$2"; shift 2;; --service) SERVICE="$2"; shift 2;;
-  --no-caddy) CADDY=0; shift;; --no-system) SYSTEM=0; shift;; *) echo "Неизвестный флаг $1"; exit 1;;
+  --no-caddy) CADDY=0; shift;; --no-system) SYSTEM=0; shift;; --unattended) UNATTENDED=1; shift;; -*) echo "Неизвестный флаг $1"; exit 1;; *) shift;;
 esac; done
+[ "$UNATTENDED_KEY" = 1 ] && UNATTENDED=1
 
 say() { printf '\n\033[1;36m▸ %s\033[0m\n' "$*"; }
 # Answers come from the keyboard. Without a terminal (automatic check, container) the default is used.
-HAS_TTY=0; { exec 3</dev/tty; } 2>/dev/null && HAS_TTY=1 && exec 3<&-
+HAS_TTY=0; [ "$UNATTENDED" = 0 ] && { exec 3</dev/tty; } 2>/dev/null && HAS_TTY=1 && exec 3<&-
+# On a fresh server the system updates itself on first boot: wait for the package lock instead of failing.
+APT="sudo apt-get -o DPkg::Lock::Timeout=900"
 ask() { local q="$1" def="${2:-}" v=""; if [ "$HAS_TTY" = 1 ]; then read -r -p "$q${def:+ [$def]}: " v < /dev/tty || true; else echo "$q: [$def] (нет терминала, беру по умолчанию)" >&2; fi; echo "${v:-$def}"; }
 # Inside a container there is no systemd: the service, firewall and clock steps are skipped.
 HAS_SYSTEMD=0; [ -d /run/systemd/system ] && HAS_SYSTEMD=1
@@ -35,26 +54,34 @@ if [ "$(id -u)" = 0 ]; then
   if [ -s /root/.ssh/authorized_keys ]; then
     mkdir -p "/home/$MF_USER/.ssh" && cp /root/.ssh/authorized_keys "/home/$MF_USER/.ssh/" && chown -R "$MF_USER:$MF_USER" "/home/$MF_USER/.ssh" && chmod 700 "/home/$MF_USER/.ssh"
   fi
+  # The setup phrase goes to the new user through a private file (it may contain spaces or quotes).
+  for f in BOT_KEY OWNER_CODE; do
+    v="${!f}"; [ -n "$v" ] && printf '%s' "$v" > "/home/$MF_USER/.mf-$f" && chown "$MF_USER:$MF_USER" "/home/$MF_USER/.mf-$f" && chmod 600 "/home/$MF_USER/.mf-$f"
+  done
+  [ -n "$BOT_KEY" ] && ARGS="$ARGS --unattended"
+  if [ -n "${SETUP_CODE:-}" ]; then
+    printf '%s' "$SETUP_CODE" > "/home/$MF_USER/.mf-setup-code" && chown "$MF_USER:$MF_USER" "/home/$MF_USER/.mf-setup-code" && chmod 600 "/home/$MF_USER/.mf-setup-code"
+  fi
   SELF=/tmp/mainframe-install-server.sh
   # Started from a copy of the code (not curl | bash): the new user installs from that copy.
   SRC_FROM=""; [ -f "$(dirname "$0")/../src/index.js" ] && SRC_FROM="$(cd "$(dirname "$0")/.." && pwd)" && chmod -R o+rX "$SRC_FROM" 2>/dev/null && chmod o+x "$(dirname "$SRC_FROM")" 2>/dev/null || true
   if [ -f "$0" ] && grep -q "Установка личного мейнфрейма" "$0" 2>/dev/null; then cp "$0" "$SELF"; else curl -fsSL "${MAINFRAME_INSTALL_URL:-https://raw.githubusercontent.com/qlmsv/mainframe/main/scripts/install-server.sh}" -o "$SELF"; fi
   chmod 755 "$SELF"
   echo "Продолжаю от пользователя $MF_USER (root для службы не нужен)."
-  if { exec 3</dev/tty; } 2>/dev/null; then exec 3<&-; exec su - "$MF_USER" -c "MF_SRC_DIR='$SRC_FROM' bash $SELF $*" < /dev/tty; else exec su - "$MF_USER" -c "MF_SRC_DIR='$SRC_FROM' bash $SELF $*" < /dev/null; fi
+  if [ "$UNATTENDED" = 0 ] && { exec 3</dev/tty; } 2>/dev/null; then exec 3<&-; exec su - "$MF_USER" -c "MF_SRC_DIR='$SRC_FROM' bash $SELF $ARGS" < /dev/tty; else exec su - "$MF_USER" -c "MF_SRC_DIR='$SRC_FROM' bash $SELF $ARGS" < /dev/null; fi
 fi
 export DEBIAN_FRONTEND=noninteractive
 
 if [ "$SYSTEM" = 1 ]; then
   say "Система: пакеты, подкачка, файрвол, часовой пояс"
-  sudo apt-get update -qq
-  sudo apt-get install -y -qq git sqlite3 build-essential python3-venv ufw fail2ban unattended-upgrades ffmpeg jq curl >/dev/null
+  $APT update -qq
+  $APT install -y -qq git sqlite3 build-essential python3-venv ufw fail2ban unattended-upgrades ffmpeg jq curl >/dev/null
   if ! swapon --show | grep -q . && [ "$(free -m | awk '/Mem:/{print $2}')" -lt 3500 ]; then
     sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile >/dev/null && sudo swapon /swapfile
     echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab >/dev/null
   fi
   if [ "$HAS_SYSTEMD" = 1 ]; then
-    TZ_NEW=$(ask "Часовой пояс (для сводок и расписания), например Europe/Moscow или Asia/Almaty" "$(timedatectl show -p Timezone --value 2>/dev/null || echo UTC)")
+    [ "$UNATTENDED" = 1 ] && TZ_NEW=UTC || TZ_NEW=$(ask "Часовой пояс (для сводок и расписания), например Europe/Moscow или Asia/Almaty" "$(timedatectl show -p Timezone --value 2>/dev/null || echo UTC)")
     sudo timedatectl set-timezone "$TZ_NEW" || true
     # Password login is switched off only when a key is already in place, or the owner would be locked out.
     if [ -s "$HOME/.ssh/authorized_keys" ]; then sudo sed -i "s/^#\?PasswordAuthentication.*/PasswordAuthentication no/" /etc/ssh/sshd_config && sudo systemctl reload ssh || true; fi
@@ -62,7 +89,7 @@ if [ "$SYSTEM" = 1 ]; then
     sudo systemctl enable --now fail2ban >/dev/null 2>&1 || true
   fi
   if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 24 ]; then
-    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - >/dev/null 2>&1 && sudo apt-get install -y -qq nodejs >/dev/null
+    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - >/dev/null 2>&1 && $APT install -y -qq nodejs >/dev/null
   fi
   command -v uv >/dev/null || [ -x "$HOME/.local/bin/uv" ] || curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
   # Mac projects keep their Mac paths on the server: /Users must be writable for their empty folders.
@@ -89,7 +116,10 @@ if [ ! -d vendor/telegram-mcp ]; then
 fi
 (cd vendor/telegram-mcp && uv sync -q)
 CLAUDE_BIN=$(ls -d "$DIR"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*/claude 2>/dev/null | grep -v musl | head -1)
-[ -n "$CLAUDE_BIN" ] && sudo ln -sf "$CLAUDE_BIN" /usr/local/bin/claude
+[ -n "$CLAUDE_BIN" ] && [ ! -x "$HOME/.local/bin/claude" ] && sudo ln -sf "$CLAUDE_BIN" /usr/local/bin/claude
+# Claude Code (official installer), the browser without a screen, Google connector: scripts/server-tools.sh
+[ -f .env ] || cp .env.example .env
+MAINFRAME_DIR="$DIR" bash scripts/server-tools.sh || echo "Часть инструментов не поставилась: потом bash scripts/server-tools.sh"
 
 say "Настройки"
 [ -f .env ] || cp .env.example .env
@@ -102,6 +132,21 @@ set_env TUNNEL off
 [ "$CADDY" = 1 ] && set_env PUBLIC_URL "https://$HOSTNAME_PUBLIC"
 set_env WORKSPACE_DIR "$HOME/workspace"; mkdir -p "$HOME/workspace"
 set_env SERVER_DIRS "$HOME/workspace"
+[ -n "$BOT_KEY" ] && [ ! -f "$HOME/.mf-BOT_KEY" ] && { printf '%s' "$BOT_KEY" > "$HOME/.mf-BOT_KEY"; chmod 600 "$HOME/.mf-BOT_KEY"; UNATTENDED=1; }
+[ -n "$OWNER_CODE" ] && [ ! -f "$HOME/.mf-OWNER_CODE" ] && { printf '%s' "$OWNER_CODE" > "$HOME/.mf-OWNER_CODE"; chmod 600 "$HOME/.mf-OWNER_CODE"; }
+if [ -f "$HOME/.mf-BOT_KEY" ]; then
+  # Setup goes on in the chat with the bot (src/chatsetup.js): name, time zone, model and its key.
+  K=$(tr -d '\r\n ' < "$HOME/.mf-BOT_KEY"); rm -f "$HOME/.mf-BOT_KEY"
+  if printf '%s' "$K" | grep -Eq '^[0-9]{6,12}:[A-Za-z0-9_-]{30,}$'; then set_env BOT_TOKEN "$K"; set_env CHANNEL telegram; else set_env MAX_TOKEN "$K"; set_env CHANNEL max; fi
+  set_env CHAT_SETUP on
+  UNATTENDED=1
+fi
+if [ -f "$HOME/.mf-OWNER_CODE" ]; then set_env OWNER_CODE "$(tr -d '\r\n|' < "$HOME/.mf-OWNER_CODE")"; rm -f "$HOME/.mf-OWNER_CODE"; fi
+if [ -f "$HOME/.mf-setup-code" ]; then
+  # Unattended install: everything else is asked by the setup wizard in the browser.
+  set_env SETUP_CODE "$(tr -d '\r\n|' < "$HOME/.mf-setup-code")"; rm -f "$HOME/.mf-setup-code"
+fi
+if [ "$UNATTENDED" = 1 ]; then :; else
 grep -q "^OWNER_NAME=..*" .env || set_env OWNER_NAME "$(ask 'Как тебя зовут (так агент будет к тебе обращаться)')"
 if ! grep -q "^BOT_TOKEN=..*" .env; then
   echo "Создай бота у @BotFather в Telegram: /newbot, придумай имя. Он пришлёт токен."
@@ -109,21 +154,23 @@ if ! grep -q "^BOT_TOKEN=..*" .env; then
 fi
 grep -q "^OWNER_TG_USERNAME=..*" .env || set_env OWNER_TG_USERNAME "$(ask 'Твой @username в Telegram без @ (Enter, если нет)' '')"
 grep -q "^SOCIAL_TG_CHANNEL=..*" .env || set_env SOCIAL_TG_CHANNEL "$(ask 'Твой Telegram-канал без @ (Enter, если нет)' '')"
+fi
 [ -f mcp.json ] || echo '{ "mcpServers": {} }' > mcp.json
 
 if [ "$CADDY" = 1 ] && [ "$HAS_SYSTEMD" = 1 ]; then
   say "https для пульта: $HOSTNAME_PUBLIC"
   if ! command -v caddy >/dev/null; then
-    sudo apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https >/dev/null
+    $APT install -y -qq debian-keyring debian-archive-keyring apt-transport-https >/dev/null
     curl -1sLf "https://dl.cloudsmith.io/public/caddy/stable/gpg.key" | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg --yes
     curl -1sLf "https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt" | sudo tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
-    sudo apt-get update -qq && sudo apt-get install -y -qq caddy >/dev/null
+    $APT update -qq && $APT install -y -qq caddy >/dev/null
   fi
   printf '%s {\n  encode gzip\n  reverse_proxy 127.0.0.1:%s {\n    flush_interval -1\n  }\n}\n' "$HOSTNAME_PUBLIC" "$PORT" | sudo tee /etc/caddy/Caddyfile >/dev/null
   sudo systemctl reload caddy || sudo systemctl restart caddy
   echo "Если у сервера облачный файрвол (AWS Security Group и т.п.), открой в нём порты 80 и 443."
 fi
 
+if [ "$UNATTENDED" = 1 ]; then :; else
 say "Вход в Claude (нужна подписка Pro или Max)"
 if [ ! -f "$HOME/.claude/.credentials.json" ] && ! grep -q "^CLAUDE_CODE_OAUTH_TOKEN=..*" .env; then
   echo "Сейчас откроется вход: скопируй ссылку в браузер, войди, вставь код обратно сюда."
@@ -137,15 +184,19 @@ if ! grep -q "^TELEGRAM_SESSION_STRING=..*" .env && [ "$HAS_TTY" = 1 ] && [ "$(a
   set_env TELEGRAM_API_HASH "$(ask 'api_hash')"
   bash scripts/telegram-login.sh < /dev/tty || echo "Вход в Telegram не завершён. Потом: bash scripts/telegram-login.sh"
 fi
+fi
 
+voice() {
 say "Голосовые: расшифровка прямо на сервере (whisper.cpp, 3–5 минут сборки)"
 if [ "$(free -m | awk '/Mem:/{print $2}')" -ge 1500 ]; then
   bash scripts/install-whisper-server.sh || echo "Расшифровка голосовых не поставилась, это можно сделать позже: bash scripts/install-whisper-server.sh"
 else
   echo "Памяти меньше 1.5 ГБ: расшифровку голосовых пропускаю."
 fi
+}
 
 if [ "$HAS_SYSTEMD" = 0 ]; then
+  [ "$UNATTENDED" = 1 ] || voice
   say "systemd нет (контейнер): службу не ставлю. Запуск вручную: cd $DIR && npm start"
   exit 0
 fi
@@ -176,9 +227,23 @@ sudo systemctl daemon-reload && sudo systemctl enable --now "$SERVICE" >/dev/nul
 (crontab -l 2>/dev/null | grep -v "$DIR/scripts/backup.sh"; echo "30 3 * * * MAINFRAME_DIR=$DIR $DIR/scripts/backup.sh >> $DIR/data/logs/backup.log 2>&1") | crontab -
 for i in $(seq 1 30); do curl -fs -o /dev/null -H 'x-mf-client: 1' "http://127.0.0.1:$PORT/api/state" && break; sleep 2; done
 
+# The wizard is already open while the voice part builds (it takes a few minutes).
+voice
+
 TOKEN=$(cat data/dashboard-token.secret 2>/dev/null || true)
 CODE=$(cat data/pairing-code.secret 2>/dev/null || true)
 say "Готово"
+if grep -q "^CHAT_SETUP=on" .env; then
+  if grep -q "^CHANNEL=telegram" .env && ! curl -fsS -m 15 -o /dev/null https://api.telegram.org/; then
+    echo "ВНИМАНИЕ: с этого сервера не открывается Telegram. Бот не сможет ответить: возьми сервер в другом месте или подключи MAX."
+  fi
+  echo "Готово. Напиши своему боту: он сам проведёт настройку в чате."
+  exit 0
+fi
+if grep -q "^SETUP_CODE=..*" .env && ! grep -q "^BOT_TOKEN=..*" .env; then
+  echo "Открой в браузере https://$HOSTNAME_PUBLIC/setup и введи свою фразу из SETUP_CODE. Дальше всё там."
+  exit 0
+fi
 echo "1. Открой своего бота в Telegram и отправь ему: /start $CODE"
 [ "$CADDY" = 1 ] && echo "2. Пульт в браузере (личная ссылка, никому не пересылай): https://$HOSTNAME_PUBLIC/?token=$TOKEN"
 echo "3. Если есть Mac: на нём выполни установку моста (почта, календарь, голосовые, проекты с кодом):"

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400" font-family="Segoe UI, -apple-system, Arial, sans-serif">
+  <rect width="640" height="400" fill="#e6ebee"/>
+  <rect x="0" y="0" width="640" height="48" fill="#fff"/>
+  <circle cx="34" cy="24" r="16" fill="#e2602b"/><text x="34" y="29" fill="#fff" font-size="13" font-weight="700" text-anchor="middle">П</text>
+  <text x="60" y="22" font-size="15" font-weight="600" fill="#111">Мой помощник</text><text x="60" y="38" font-size="12" fill="#888">бот</text>
+  <rect x="520" y="60" width="100" height="32" rx="14" fill="#e1f7cb"/><text x="570" y="81" font-size="14" text-anchor="middle" fill="#111">/start</text>
+  <rect x="20" y="102" width="430" height="52" rx="14" fill="#fff"/>
+  <text x="34" y="124" font-size="13.5" font-weight="700" fill="#111">👋 Привет! Я твой новый помощник.</text>
+  <text x="34" y="144" font-size="13" fill="#111">Настроим меня за 2 минуты. Как тебя зовут?</text>
+  <rect x="540" y="164" width="80" height="32" rx="14" fill="#e1f7cb"/><text x="580" y="185" font-size="14" text-anchor="middle" fill="#111">Анна</text>
+  <rect x="20" y="206" width="430" height="34" rx="14" fill="#fff"/><text x="34" y="228" font-size="13" fill="#111">Какой ИИ будет у меня внутри?</text>
+  <g font-size="13" fill="#2a7de1" text-anchor="middle">
+    <rect x="20" y="246" width="212" height="30" rx="8" fill="#fff"/><text x="126" y="266">DeepSeek</text>
+    <rect x="238" y="246" width="212" height="30" rx="8" fill="#fff"/><text x="344" y="266">GLM</text>
+    <rect x="20" y="280" width="212" height="30" rx="8" fill="#fff"/><text x="126" y="300">Kimi</text>
+    <rect x="238" y="280" width="212" height="30" rx="8" fill="#fff"/><text x="344" y="300">Qwen</text>
+  </g>
+  <rect x="20" y="322" width="430" height="34" rx="14" fill="#fff"/><text x="34" y="344" font-size="13" fill="#111">🔒 Сообщение с ключом удалил. ✅ Готово, ИИ отвечает.</text>
+  <text x="20" y="384" font-size="13" fill="#e2602b" font-weight="700">Дальше бот сам задаст 10 вопросов, чтобы познакомиться.</text>
+</svg>

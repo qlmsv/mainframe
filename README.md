@@ -42,7 +42,11 @@
 
 ## Установка
 
-**Сервер.** Подключись к нему по SSH и выполни:
+**Проще всего.** Создай бота у @BotFather, при создании сервера (Ubuntu 24.04) вставь в поле «Cloud-init / User data» две строки из [scripts/cloud-init.sh](scripts/cloud-init.sh) со своим ключом бота. Через 15 минут напиши боту: он сам спросит имя, часовой пояс, какой ИИ подключить и его ключ. По шагам: [docs/install-student.md](docs/install-student.md), из России: [docs/install-ru.md](docs/install-ru.md). Вместо Telegram можно MAX.
+
+**Режимы.** Только сервер, только компьютер (Mac или Windows) или сервер + компьютер: [docs/modes.md](docs/modes.md). Почта и Google с любой моделью: [docs/connectors.md](docs/connectors.md). Windows: [docs/install-windows.md](docs/install-windows.md).
+
+**Через терминал.** Подключись к серверу по SSH и выполни:
 
 ```bash
 curl -fsSL https://github.com/qlmsv/mainframe/raw/main/scripts/install-server.sh | bash
@@ -95,7 +99,7 @@ bash <(curl -fsSL https://github.com/qlmsv/mainframe/raw/main/scripts/install-ma
 | Статус | `systemctl status mainframe` |
 | Перезапуск | `sudo systemctl restart mainframe` |
 | Журнал | `tail -f ~/mainframe/data/logs/mainframe.log` |
-| Обновление | `cd ~/mainframe && git pull && npm ci --omit=dev && sudo systemctl restart mainframe` |
+| Обновление | `bash ~/mainframe/scripts/update.sh` (код, Claude Code, браузер, коннекторы, перезапуск) |
 | Новый вход в Claude | `claude auth login` |
 
 ## Состав
