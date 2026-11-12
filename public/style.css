@@ -753,3 +753,17 @@ details.fold .seg { display: flex; flex-wrap: wrap; max-width: 100%; }
 .mod-sum .ms-v { font-size: 24px; font-weight: 650; letter-spacing: -.02em; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mod-sum .ms-n { font-size: 12px; color: var(--text-3); line-height: 1.3; }
 .mod-sums:only-child, .mod-sums > .mod-sum:only-child { grid-column: 1 / -1; }
+
+/* the assistant's face (public/spark.js) */
+.brand mf-spark { margin-right: 2px; }
+.em-face { display: flex; justify-content: center; margin-bottom: 6px; }
+.sec-title mf-spark { margin: -4px 2px -4px -2px; }
+.steps summary mf-spark { margin: -4px 4px -4px 0; }
+.run-item .row mf-spark { margin: -4px 0; }
+.model-form { display: grid; gap: 8px; }
+.model-form .field { display: grid; gap: 4px; font-size: 12.5px; color: var(--text-3); }
+.ok-line { color: var(--ok); font-size: 13.5px; }
+.bad-line { color: var(--bad); font-size: 13.5px; }
+/* «Где работает»: mail, Google, the computer bridge */
+.sec-sub { font-weight: 600; font-size: 13px; margin: 14px 0 6px; color: var(--text-2); }
+pre.cmd { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; user-select: all; margin: 4px 0 8px; }

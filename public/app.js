@@ -381,6 +381,9 @@ function renderShell() {
   $('#top-stop').hidden = !paused;
   $('#top-stop').classList.toggle('paused', paused);
   $('#top-stop').setAttribute('aria-label', paused ? 'Включить автоматику' : 'Остановить всё');
+  // The assistant's face shows what it is doing: a problem, work in progress, or calm.
+  const face = S.state?.authError ? 'error' : c.sessions ? 'working' : 'idle';
+  document.querySelectorAll('mf-spark.face').forEach((f) => { if (f.getAttribute('state') !== face) f.setAttribute('state', face); });
   $('#top-live').innerHTML = c.sessions ? `<span class="dot live"></span>${c.sessions} в работе` : '';
 
   const st = S.state;
@@ -437,7 +440,7 @@ document.addEventListener('change', (e) => { if (e.target.dataset?.fwdProject) e
 
 function render() {
   if (S.authFailed) {
-    $('#view').innerHTML = `<div class="empty"><div class="em-icon">${icon('system')}</div><div class="em-title">Нет доступа</div>Открой мейнфрейм через бота в Telegram или по ссылке с токеном со страницы «Система» на Mac.</div>`;
+    $('#view').innerHTML = `<div class="empty"><div class="em-face"><mf-spark size="56"></mf-spark></div><div class="em-title">Нет доступа</div>Открой мейнфрейм через бота в Telegram или по ссылке с токеном со страницы «Система» на Mac.</div>`;
     return;
   }
   renderShell();
@@ -541,7 +544,7 @@ function viewInbox() {
   });
   if (!items.length) {
     const tgOff = !S.state?.telegram?.enabled;
-    return `${head}${top}<div class="card"><div class="empty"><div class="em-icon">${icon('inbox')}</div><div class="em-title">${tgOff ? 'Telegram-аккаунт ещё не подключён' : 'Пока тихо'}</div>${tgOff ? 'Заполни TELEGRAM_API_ID, TELEGRAM_API_HASH и TELEGRAM_SESSION_STRING в .env и перезапусти мейнфрейм.' : 'Как только кто-то напишет в личку, сообщение появится здесь.'}</div></div>`;
+    return `${head}${top}<div class="card"><div class="empty"><div class="em-face"><mf-spark size="56"></mf-spark></div><div class="em-title">${tgOff ? 'Telegram-аккаунт ещё не подключён' : 'Пока тихо'}</div>${tgOff ? 'Заполни TELEGRAM_API_ID, TELEGRAM_API_HASH и TELEGRAM_SESSION_STRING в .env и перезапусти мейнфрейм.' : 'Как только кто-то напишет в личку, сообщение появится здесь.'}</div></div>`;
   }
   // Open items first and in full; handled ones below as short rows.
   // Urgent first, then today, then the rest; newest first inside each group.
@@ -707,7 +710,7 @@ function stepsBlock(key, steps, { live = false, took = '' } = {}) {
   const tools = steps.filter((x) => x.kind === 'tool').length;
   const last = steps[steps.length - 1];
   const label = live
-    ? `<span class="dot live"></span>${last ? esc(last.kind === 'tool' ? toolName(last.name) : 'думает') : 'Начинаю'}…`
+    ? `<mf-spark size="24" state="${last?.kind === 'tool' ? 'working' : 'thinking'}"></mf-spark>${last ? esc(last.kind === 'tool' ? toolName(last.name) : 'думает') : 'Начинаю'}…`
     : `${tools ? `${tools} ${tools === 1 ? 'шаг' : tools < 5 ? 'шага' : 'шагов'}` : 'Ход работы'}${took ? ` · ${took}` : ''}`;
   const rows = steps.map((x) => (x.kind === 'tool'
     ? `<div class="tool">${icon('tool')}<b>${esc(toolName(x.name))}</b><span>${esc(x.input || '')}</span></div>`
@@ -742,7 +745,7 @@ function pastBlock(hasRuns = true) {
 function chatBody() {
   const runs = S.data.timeline || [];
   if (!runs.length && S.past[S.project]?.items?.length) return pastBlock(false);
-  if (!runs.length) return `<div class="empty"><div class="em-icon">${icon('sessions')}</div><div class="em-title">Сессия пустая</div>Напиши задачу внизу. Claude работает в папке проекта с полными правами.</div>`;
+  if (!runs.length) return `<div class="empty"><div class="em-face"><mf-spark size="56"></mf-spark></div><div class="em-title">Сессия пустая</div>Напиши задачу внизу. Claude работает в папке проекта с полными правами.</div>`;
   return pastBlock() + runs.map((r) => {
     const out = [`<div class="run-sep">${when(r.started_at)}</div>`];
     out.push(`<div class="bubble me"><span class="origin">${ORIGIN[r.origin] || r.origin}</span>${esc(r.prompt)}</div>`);
@@ -758,6 +761,7 @@ function chatBody() {
       if (e.kind === 'tool') { let t = {}; try { t = JSON.parse(e.content); } catch { /* raw */ } steps.push({ kind: 'tool', name: t.name, input: t.input }); }
       else if (e.kind === 'text') steps.push({ kind: 'text', text: e.content });
       else if (e.kind === 'system') steps.push({ kind: 'sys', text: e.content });
+      else if (e.kind === 'notify') steps.push({ kind: 'sys', text: `🔔 ${e.content}` });
       else if (e.kind === 'error') errors.push(e.content);
     }
     const took = r.finished_at && r.started_at ? (() => { const sec = Math.round((r.finished_at - r.started_at) / 1000); return sec < 60 ? `${sec} с` : `${Math.floor(sec / 60)} мин ${sec % 60} с`; })() : '';
@@ -855,7 +859,7 @@ function socialOverview() {
     </section>` : `<section class="card"><div class="empty">${esc(d.channelError || 'Telegram-канал не подключён')}</div></section>`;
 
   const r = d.report;
-  const report = !r ? `<section class="card raised"><div class="empty"><div class="em-icon">${icon('chart')}</div><div class="em-title">Сводки из Metricool ещё нет</div>Нажми «Обновить сводку»: сессия соберёт цифры по Instagram, TikTok, YouTube, Threads и Facebook и даст советы. Это одна сессия Claude, 1–3 минуты.</div></section>`
+  const report = !r ? `<section class="card raised"><div class="empty"><div class="em-face"><mf-spark size="56"></mf-spark></div><div class="em-title">Сводки из Metricool ещё нет</div>Нажми «Обновить сводку»: сессия соберёт цифры по Instagram, TikTok, YouTube, Threads и Facebook и даст советы. Это одна сессия Claude, 1–3 минуты.</div></section>`
     : `<section class="card raised"><div class="sec-title">${icon('chart')}Сводка за ${esc(r.period || 'неделю')}<span class="grow"></span><span class="faint">${when(r.generated_at)}</span></div>
         ${r.summary ? `<p class="muted" style="margin:0 0 10px">${esc(r.summary)}</p>` : ''}
         <div class="nets">${(r.networks || []).map((n) => `<div class="net">
@@ -1219,11 +1223,11 @@ function runCard(r) {
   const p = r.progress || {};
   const pct = p.m ? Math.round((p.n / p.m) * 100) : null;
   return `<div class="run-item">
-    <div class="row"><span class="dot ${r.status === 'running' ? 'live' : ''}"></span><b class="grow clamp" style="--lines:1">${esc(r.project)}</b><span class="faint">${r.status === 'queued' ? 'в очереди' : when(r.started_at)}</span>
-      <button class="icon-btn" data-action="run-stop" data-id="${r.id}" aria-label="Отменить" title="Отменить">${icon('stop')}</button></div>
+    <div class="row"><mf-spark size="30" state="${r.status === 'running' ? 'working' : r.status === 'done' ? 'done' : r.status === 'error' ? 'error' : 'idle'}"></mf-spark><b class="grow clamp" style="--lines:1">${esc(r.project)}</b><span class="faint">${r.status === 'queued' ? 'в очереди' : r.finished_at ? when(r.finished_at) : when(r.started_at)}</span>
+      ${['running', 'queued'].includes(r.status) ? `<button class="icon-btn" data-action="run-stop" data-id="${r.id}" aria-label="Отменить" title="Отменить">${icon('stop')}</button>` : ''}</div>
     <div class="faint clamp" style="--lines:2">${esc(r.prompt)}</div>
-    ${pct != null ? `<div class="run-bar"><i style="width:${pct}%"></i></div><div class="run-sub"><b>${p.n} из ${p.m}</b> · ${esc(String(p.text).replace(/^\s*\d+\s*\/\s*\d+\s*(готово|сделано|done)?\s*[:.,-]?\s*/i, ''))}</div>`
-      : `<div class="run-sub faint">${r.status === 'queued' ? 'начнётся, когда освободится сессия' : p.steps ? `шаг ${p.steps}` : 'начинаю'}</div>`}
+    ${r.finished_at ? `<div class="run-sub faint">${r.status === 'done' ? 'готово' : 'не получилось, открой сессию'}</div>` : pct != null ? `<div class="run-bar"><i style="width:${pct}%"></i></div><div class="run-sub"><b>${p.n} из ${p.m}</b> · ${esc(String(p.text).replace(/^\s*\d+\s*\/\s*\d+\s*(готово|сделано|done)?\s*[:.,-]?\s*/i, ''))}</div>`
+      : `<div class="run-sub faint">${r.status === 'queued' ? 'начнётся, когда освободится сессия' : p.text ? esc(p.text) : p.steps ? `шаг ${p.steps}` : 'начинаю'}</div>`}
   </div>`;
 }
 
@@ -1237,8 +1241,8 @@ function viewHome() {
     m ? { icon: '📅', title: 'Месяц', sub: 'траты', value: m.month, nav: 'money' } : null,
   ].filter(Boolean);
   const top = hero({ label: 'Деньги', tone: 'green', value: m?.cap || (m ? 'Счета не заданы' : 'Загружаю…'), note: m?.cap ? `по ${plural(m.accounts, 'счёту', 'счетам', 'счетам')}, в основной валюте` : m ? 'пришли скриншот банка в бот, и остаток появится здесь' : '', tiles });
-  const running = h?.running || [];
-  const work = `<section class="card raised"><div class="sec-title">${icon('sessions')}Сейчас в работе${running.length ? ` <span class="badge accent">${running.length}</span>` : ''}</div>
+  const running = [...(h?.running || []), ...(h?.recent || [])];
+  const work = `<section class="card raised"><div class="sec-title">${icon('sessions')}Сейчас в работе${h?.running?.length ? ` <span class="badge accent">${h.running.length}</span>` : ''}</div>
     ${running.length ? running.map(runCard).join('') : '<div class="faint">Сейчас ничего не идёт</div>'}</section>`;
   const wait = [];
   for (const a of h?.asked || []) {
@@ -1248,7 +1252,7 @@ function viewHome() {
   }
   if (h?.pendingMemory?.length) wait.push(`<button class="wait-item tap" data-nav="memory"><div class="row"><span class="badge accent">память</span><b class="grow">${plural(h.pendingMemory.length, 'заметка ждёт', 'заметки ждут', 'заметок ждут')} проверки</b>${icon('back')}</div><div class="faint clamp" style="--lines:1">${esc(h.pendingMemory.map((n) => n.title).join(', '))}</div></button>`);
   if (h?.inboxOpen) wait.push(`<button class="wait-item tap" data-nav="people"><div class="row"><span class="badge info">сообщения</span><b class="grow">${plural(h.inboxOpen, 'сообщение ждёт', 'сообщения ждут', 'сообщений ждут')} решения</b>${icon('back')}</div></button>`);
-  const waitBlock = `<section class="card raised"><div class="sec-title">${icon('check')}Ждёт тебя${wait.length ? ` <span class="badge accent">${wait.length}</span>` : ''}</div>${wait.join('') || '<div class="faint">Ничего не ждёт ✨</div>'}</section>`;
+  const waitBlock = `<section class="card raised"><div class="sec-title"><mf-spark size="26" state="${wait.length ? 'waiting' : 'idle'}"></mf-spark>Ждёт тебя${wait.length ? ` <span class="badge accent">${wait.length}</span>` : ''}</div>${wait.join('') || '<div class="faint">Ничего не ждёт ✨</div>'}</section>`;
   const a = d.agenda;
   const today = new Date().toDateString();
   const evs = (a?.events || []).filter((e) => e.start && new Date(e.start).toDateString() === today);
@@ -1311,6 +1315,86 @@ function viewPeopleMessages() {
     ${rulesBlock()}`;
 }
 
+// ---------- model provider: Claude login or any Anthropic-compatible API (src/models.js) ----------
+function modelBlock() {
+  const m = S.state?.model;
+  if (!m) return '';
+  const f = S.modelForm || {};
+  const pid = f.provider || m.provider;
+  const p = m.providers.find((x) => x.id === pid) || m.providers[0];
+  const same = pid === m.provider;
+  const t = S.modelTest;
+  const res = t ? (t.busy ? '<div class="faint">Проверяю…</div>' : t.ok ? `<div class="ok-line">✓ Ответ «${esc(t.text)}» за ${(t.ms / 1000).toFixed(1)} с · ${esc(t.model || '')}</div>` : `<div class="bad-line">Не получилось: ${esc(t.error || 'пустой ответ')}</div>`) : '';
+  return `<section class="card raised">
+    <div class="sec-title">${icon('spark')}Модель<span class="grow"></span><span class="badge ${m.ready ? 'ok' : 'warn'}">${esc(m.name)}</span></div>
+    <div class="faint" style="margin:-4px 0 10px">Сейчас: ${esc(m.main || '')}${m.fast && m.fast !== m.main ? `, быстрая ${esc(m.fast)}` : ''}. Смена действует на новые сообщения, перезапуск не нужен.</div>
+    ${!m.connectors ? '<div class="banner warn" style="margin:0 0 10px">Не через Claude: коннекторы claude.ai (Gmail, Календарь, Drive, Metricool) не работают. Почта и Google ниже, а также Mac, работают с любой моделью.</div>' : ''}
+    <form class="model-form" data-form="model">
+      <label class="field">Провайдер<select class="input" name="provider" data-model-provider>${m.providers.map((x) => `<option value="${x.id}" ${x.id === pid ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+      ${pid === 'claude' ? '<div class="faint">Работает на твоей подписке Claude: вход через <span class="kbd">claude auth login</span> на сервере.</div>' : `
+      <label class="field">Ключ API<input class="input" name="key" type="password" autocomplete="off" data-keep="m-key" placeholder="${same && m.keySet ? 'задан, вставь новый для замены' : 'вставь ключ'}"></label>
+      ${p.keys ? `<div class="faint">Где взять ключ: <a href="${esc(p.keys)}" target="_blank" rel="noopener">${esc(p.keys.replace(/^https?:\/\//, '').split('/')[0])}</a>${p.docs ? ` · <a href="${esc(p.docs)}" target="_blank" rel="noopener">инструкция</a>` : ''}</div>` : ''}
+      ${pid === 'custom' ? `<label class="field">Адрес API (Anthropic-совместимый)<input class="input" name="baseUrl" data-keep="m-base" placeholder="https://…/anthropic" value="${esc(same ? m.baseUrl || '' : '')}"></label>` : ''}
+      <div class="row" style="gap:8px;flex-wrap:wrap">
+        <label class="field grow">Основная модель<input class="input" name="main" data-keep="m-main" placeholder="${esc(p.main || 'название модели')}" value="${esc(same && m.main !== p.main ? m.main || '' : '')}"></label>
+        <label class="field grow">Быстрая<input class="input" name="fast" data-keep="m-fast" placeholder="${esc(p.fast || 'как основная')}" value="${esc(same && m.fast !== p.fast && m.fast !== m.main ? m.fast || '' : '')}"></label>
+      </div>`}
+      <div class="row" style="gap:8px;margin-top:4px"><button class="btn primary small">${icon('check')}Сохранить</button><button type="button" class="btn small" data-action="model-test">${icon('play')}Проверить</button></div>
+      ${res}
+    </form>
+  </section>`;
+}
+
+
+// ---------- where it works, the computer, mail and Google (src/modes.js, mailbox.js, google.js) ----------
+async function loadConn() {
+  if (S.connLoading) return;
+  S.connLoading = true;
+  try { S.conn = await api('/api/connect'); } catch { S.conn = null; } finally { S.connLoading = false; }
+  render();
+}
+function connectBlock() {
+  const c = S.conn;
+  if (!c) { loadConn(); return ''; }
+  const dot = (on) => `<span class="badge ${on ? 'ok' : ''}">${on ? 'на связи' : 'нет связи'}</span>`;
+  const m = c.modes[c.mode];
+  const modeChips = ['server', 'computer', 'both'].map((id) => `<button type="button" class="chip-btn ${id === c.mode ? 'on' : ''}" data-action="conn-mode" data-id="${id}">${esc(c.modes[id].title)}</button>`).join('');
+  const b = S.bridgeCmd;
+  const comp = c.computer;
+  const computer = c.mode === 'server' ? '' : `<div class="sec-sub">Компьютер${comp ? `: ${comp.os === 'mac' ? 'Mac' : 'Windows'} ${esc(comp.hostname || '')}` : ''}</div>
+    ${comp ? `<div class="row" style="gap:6px;flex-wrap:wrap"><span class="faint">браузер</span>${dot(c.bridge.chrome)}<span class="faint">управление</span>${dot(c.bridge.computer)}${comp.os === 'mac' ? `<span class="faint">приложения</span>${dot(c.bridge.apple)}` : ''}</div>` : '<div class="faint">Ещё не подключён.</div>'}
+    ${b ? `<div class="faint" style="margin-top:8px"><b>Mac</b>, в «Терминале»:</div><pre class="cmd">${esc(b.mac)}</pre><div class="faint"><b>Windows</b>, в PowerShell:</div><pre class="cmd">${esc(b.windows)}</pre><div class="faint">Команда действует час и один раз.</div>`
+      : `<button class="btn small" data-action="conn-bridge" style="margin-top:8px">${icon('plus')}${comp ? 'Подключить заново' : 'Подключить компьютер'}</button>`}`;
+  const mail = c.mail.configured
+    ? `<div class="row"><span class="grow">${esc(c.mail.address)} · ${esc(c.mail.provider || '')}</span><button class="btn small ghost" data-action="conn-mail-forget">Отключить</button></div>`
+    : `<form data-form="conn-mail" class="model-form">
+        <label class="field">Адрес<input class="input" name="address" type="email" data-keep="c-mail" placeholder="you@yandex.ru" required></label>
+        <label class="field">Пароль приложения<input class="input" name="password" type="password" autocomplete="off" data-keep="c-pass" required></label>
+        <div class="faint">${esc(c.mailPreset?.help || 'Gmail, Яндекс, Mail.ru, iCloud: серверы подставятся сами. Для своего домена впиши IMAP и SMTP.')}</div>
+        <div class="row" style="gap:8px"><label class="field grow">IMAP<input class="input" name="imap" data-keep="c-imap" placeholder="imap.example.com:993"></label><label class="field grow">SMTP<input class="input" name="smtp" data-keep="c-smtp" placeholder="smtp.example.com:465"></label></div>
+        <button class="btn primary small">${icon('check')}Проверить и подключить</button></form>`;
+  const g = c.google;
+  const gl = S.googleUrl;
+  const google = g.connected
+    ? `<div class="row"><span class="grow">${esc(g.email)} · ${esc(g.services.join(', '))}</span><button class="btn small ghost" data-action="conn-google-forget">Отключить</button></div>`
+    : !g.clientSet
+      ? `<div class="faint">Нужен свой клиент Google: console.cloud.google.com → проект → включи Calendar, Drive, Docs, Sheets API → экран входа «External» и «Publish app» → клиент «Desktop app». Подробно: docs/connectors.md.</div>
+         <form data-form="conn-google-client" class="model-form"><input class="input" name="clientId" data-keep="c-gid" placeholder="Client ID" required><input class="input" name="clientSecret" type="password" data-keep="c-gsec" placeholder="Client secret" required><button class="btn small primary">Сохранить</button></form>`
+      : `<button class="btn small primary" data-action="conn-google-start">Войти в Google</button>
+         ${gl ? `<div class="faint" style="margin-top:6px"><a href="${esc(gl)}" target="_blank" rel="noopener">Открыть вход в Google</a>. После входа откроется пустая страница: скопируй её адрес (http://127.0.0.1:8085/…) сюда.</div>
+         <form data-form="conn-google-finish" class="row" style="gap:6px"><input class="input grow" name="pasted" data-keep="c-gpaste" placeholder="http://127.0.0.1:8085/?code=…" required><button class="btn small primary">Готово</button></form>` : ''}`;
+  return `<section class="card raised">
+    <div class="sec-title">${icon('system')}Где работает<span class="grow"></span><span class="badge">${esc(m.title)}</span></div>
+    <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">${modeChips}</div>
+    <div class="faint">Работает: ${esc(m.works.join(', '))}. Не будет: ${esc(m.not.join(', '))}.</div>
+    ${computer}
+    <div class="sec-sub">На сервере</div>
+    <div class="faint">Браузер: ${c.serverBrowser ? 'есть' : c.platform === 'linux' ? 'не установлен (команда обновления поставит)' : 'не нужен'} · Claude Code: ${esc(c.claudeCli || 'не установлен')}</div>
+    <div class="sec-sub">Почта (с любой моделью)</div>${mail}
+    <div class="sec-sub">Google Календарь и Диск (с любой моделью)</div>${google}
+  </section>`;
+}
+
 // ---------- system: one light, details on tap ----------
 function viewSystemHost() {
   const st = S.state;
@@ -1326,7 +1410,9 @@ function viewSystemHost() {
   const lamp = st.authError || bad.includes('Бот') ? 'bad' : bad.length || st.paused ? 'warn' : 'ok';
   const text = lamp === 'ok' ? 'Всё работает' : st.paused && !bad.length ? 'Автоматика на паузе' : `Нужна проверка: ${bad.join(', ')}`;
   return `<div class="page-head"><div><h1>Система</h1></div></div>
-    <section class="card raised sys-lamp"><span class="lamp ${lamp}"></span><div class="grow"><b>${esc(text)}</b><div class="faint">${st.running.length ? `в работе ${st.running.length}` : 'сейчас тихо'} · ${st.paused ? 'автоматика на паузе' : 'автоматика включена'}</div></div></section>
+    <section class="card raised sys-lamp"><mf-spark size="44" state="${lamp === 'bad' ? 'error' : lamp === 'warn' ? 'waiting' : 'idle'}"></mf-spark><div class="grow"><b>${esc(text)}</b><div class="faint">${st.running.length ? `в работе ${st.running.length}` : 'сейчас тихо'} · ${st.paused ? 'автоматика на паузе' : 'автоматика включена'}</div></div></section>
+    ${modelBlock()}
+    ${connectBlock()}
     <details class="card raised fold"><summary class="sec-title">${icon('system')}Подключения и настройки</summary>${viewSystem()}</details>
     <details class="card raised fold"><summary class="sec-title">${icon('log')}Журнал</summary>${viewLog()}</details>`;
 }
@@ -1339,7 +1425,7 @@ const PRESETS = [
 function viewTasks() {
   const tasks = S.data.tasks || [];
   const head = `<div class="page-head"><div><h1>Задачи по расписанию</h1><p>Мейнфрейм сам запускает их в нужной сессии и присылает итог в бот.</p></div><button class="btn primary" data-action="new-task">${icon('plus')}Задача</button></div>`;
-  if (!tasks.length) return `${head}<div class="card"><div class="empty"><div class="em-icon">${icon('tasks')}</div><div class="em-title">Задач пока нет</div>Например: каждое утро сводка по календарю и почте, по пятницам разбор заметок.<div style="margin-top:14px"><button class="btn primary" data-action="new-task">Создать задачу</button></div></div></div>`;
+  if (!tasks.length) return `${head}<div class="card"><div class="empty"><div class="em-face"><mf-spark size="56"></mf-spark></div><div class="em-title">Задач пока нет</div>Например: каждое утро сводка по календарю и почте, по пятницам разбор заметок.<div style="margin-top:14px"><button class="btn primary" data-action="new-task">Создать задачу</button></div></div></div>`;
   const projects = S.data.projects || [];
   const nextT = tasks.filter((t) => t.enabled && t.next_run).sort((a, b) => a.next_run - b.next_run)[0];
   const top = hero({
@@ -1363,7 +1449,7 @@ function viewTasks() {
 function viewPeople() {
   const list = S.data.contacts || [];
   const head = `<div class="page-head"><div><h1>Люди</h1><p>Кто тебе пишет и что с этим делать. «Авто» значит действовать без подтверждения, если диспетчер уверен.</p></div></div>`;
-  if (!list.length) return `${head}<div class="card"><div class="empty"><div class="em-icon">${icon('people')}</div><div class="em-title">Пока никого</div>Люди появятся, когда напишут в Telegram.</div></div>`;
+  if (!list.length) return `${head}<div class="card"><div class="empty"><div class="em-face"><mf-spark size="56"></mf-spark></div><div class="em-title">Пока никого</div>Люди появятся, когда напишут в Telegram.</div></div>`;
   return `${head}<div class="card raised list">${list.map((c) => `<div class="li">
     <div class="avatar">${esc(initials(c.name))}</div>
     <div class="li-main"><div class="li-title">${esc(c.name || c.chat_id)}</div><div class="li-sub">${c.username ? `@${esc(c.username)}` : esc(c.chat_id)}</div></div>
@@ -1836,6 +1922,19 @@ document.addEventListener('click', async (e) => {
       break;
     }
     case 'run-task': await act(() => api(`/api/tasks/${id}/run`, { method: 'POST' }), 'Запущено'); break;
+    case 'conn-mode': S.conn = await act(() => api('/api/connect/mode', { method: 'POST', body: { mode: id } }), 'Режим сохранён') || S.conn; render(); break;
+    case 'conn-bridge': S.bridgeCmd = await act(() => api('/api/connect/bridge', { method: 'POST' })); render(); break;
+    case 'conn-mail-forget': if (await ask('Отключить почту?')) { S.conn = await act(() => api('/api/connect/mail/forget', { method: 'POST' }), 'Почта отключена') || S.conn; render(); } break;
+    case 'conn-google-forget': if (await ask('Отключить Google?')) { S.conn = await act(() => api('/api/connect/google/forget', { method: 'POST' }), 'Google отключён') || S.conn; render(); } break;
+    case 'conn-google-start': { const r = await act(() => api('/api/connect/google/start', { method: 'POST', body: {} })); if (r) { S.googleUrl = r.url; window.open(r.url, '_blank', 'noopener'); render(); } break; }
+    case 'model-test': {
+      const form = $('[data-form="model"]');
+      const body = Object.fromEntries(new FormData(form).entries());
+      S.modelTest = { busy: true }; render();
+      try { S.modelTest = await api('/api/model/test', { method: 'POST', body }); } catch (err) { S.modelTest = { ok: false, error: err.message }; }
+      render();
+      break;
+    }
     case 'run-stop': if (await ask('Отменить эту задачу?')) await act(() => api(`/api/runs/${id}/stop`, { method: 'POST' }), 'Отменено'); break;
     case 'home-answer': {
       const out = await act(() => api(`/api/projects/${id}/message`, { method: 'POST', body: { prompt: el.dataset.text } }), 'Ответ ушёл в сессию');
@@ -2031,3 +2130,32 @@ document.addEventListener('submit', async (e) => {
 
 // iOS shows :active (the pressed look) only when the page listens to touches.
 document.addEventListener('touchstart', () => {}, { passive: true });
+
+// Model settings: switching the provider redraws the form; saving writes .env on the server.
+document.addEventListener('change', (e) => {
+  if (e.target.dataset?.modelProvider === undefined) return;
+  S.modelForm = { provider: e.target.value };
+  S.modelTest = null;
+  render();
+});
+document.addEventListener('submit', async (e) => {
+  if (e.target.dataset.form !== 'model') return;
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(e.target).entries());
+  const ok = await act(() => api('/api/model', { method: 'POST', body }), 'Сохранено: новые сообщения пойдут через эту модель');
+  if (ok) { e.target.querySelectorAll('[data-keep]').forEach((i) => { i.value = ''; delete i.dataset.touched; }); S.modelForm = null; await refresh(); }
+});
+
+// Mail and Google forms in «Система».
+document.addEventListener('submit', async (e) => {
+  const f = e.target.dataset.form;
+  const urls = { 'conn-mail': ['/api/connect/mail', 'Почта подключена'], 'conn-google-client': ['/api/connect/google/client', 'Сохранено'], 'conn-google-finish': ['/api/connect/google/finish', 'Google подключён'] };
+  if (!urls[f]) return;
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(e.target).entries());
+  const out = await act(() => api(urls[f][0], { method: 'POST', body }), urls[f][1]);
+  if (out) { e.target.querySelectorAll('[data-keep]').forEach((i) => { i.value = ''; delete i.dataset.touched; }); S.conn = out; if (f === 'conn-google-finish') S.googleUrl = null; render(); }
+});
+
+// Typed values in kept fields survive the live redraws.
+document.addEventListener('input', (e) => { if (e.target.dataset?.keep) e.target.dataset.touched = '1'; });
