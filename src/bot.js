@@ -3,15 +3,19 @@ import * as widgets from './widgets.js';
 import { config } from './config.js';
 import { all, get, run, now, kvGet, kvSet, addLog } from './db.js';
 import { bus } from './bus.js';
-import { startRun, stopAll, resumeAll, stopRun, onRunFinished } from './agent.js';
+import { startRun, stopAll, resumeAll, stopRun, onRunFinished, addEvent } from './agent.js';
 import { onInboxUpdate, forwardItem, replyItem, ignoreItem, getItem } from './dispatcher.js';
 import { fireTask, updateTask } from './scheduler.js';
+import { alertsDigest } from './alerts.js';
 import { setMainframeHandlers } from './mcp.js';
 import { transcribeAudio, voiceEnabled } from './voice.js';
+import { setMailApprover, decideSend } from './mailbox.js';
+import * as chatsetup from './chatsetup.js';
 import { saveUpload, withAttachments } from './uploads.js';
 import { completeReminder } from './apple.js';
 import { refreshReport } from './social.js';
-import { contentCallback } from './content.js';
+import { contentCallback, todayPosts } from './content.js';
+import { modelState, saveModelSettings } from './models.js';
 import { listMemory, listPending, approvePending, rejectPending, markAnnounced, announced } from './memory.js';
 import {
   activityOf, esc, body, answer, tgTime, dur, tok, untok, MENU, menuFor, mainKeyboard, currentProject,
@@ -65,6 +69,8 @@ async function send(chatId, html, extra = {}) {
 }
 
 export async function sendOwner(html, extra = {}) {
+  // The owner's channel can be MAX instead of Telegram (src/max.js).
+  if (config.channel === 'max') { const { maxSendOwner } = await import('./max.js'); return maxSendOwner(html, extra); }
   const id = ownerId();
   if (!bot || !id) throw new Error('Бот не подключён или владелец не привязан');
   return send(id, html, extra);
@@ -210,6 +216,7 @@ function memoryScreen() {
 // New notes waiting for approval: one card, a ✅/❌ pair per note. Tapped notes show their
 // outcome; untouched ones are saved anyway after 3 days, marked «не проверено».
 function pendingCard(files) {
+  const size = Math.max(120, Math.min(450, Math.floor(3000 / files.length)));
   const pend = new Map(listPending().map((n) => [n.file, n]));
   const kept = new Set(listMemory().map((n) => n.file));
   const memo = kvGet('memory_card_text', {});
@@ -219,7 +226,7 @@ function pendingCard(files) {
     const n = pend.get(f);
     if (n) {
       memo[f] = n.title;
-      lines.push('', `<b>${esc(n.title)}</b>\n<blockquote expandable>${esc(cut(n.body, 450))}</blockquote>`);
+      lines.push('', `<b>${esc(n.title)}</b>\n<blockquote expandable>${esc(cut(n.body, size))}</blockquote>`);
       kb.text(`✅ ${cut(n.title, 26)}`, `mem:y:${tok({ f, files })}`).success().text('❌', `mem:n:${tok({ f, files })}`).row();
     } else lines.push('', `${kept.has(f) ? '✅' : '❌'} <s>${esc(memo[f] || f)}</s>`);
   }
@@ -227,9 +234,30 @@ function pendingCard(files) {
   return { text: lines.join('\n'), kb, open: files.some((f) => pend.has(f)) };
 }
 
+// The owner's day comes in two messages (morning and evening digest tasks, kv digest_tasks
+// {morning: taskId, evening: taskId}). With an evening digest, notes to approve wait for it.
+const digestTasks = () => kvGet('digest_tasks', {});
+const digestKind = (taskName) => {
+  if (!taskName) return null;
+  const d = digestTasks();
+  for (const k of ['morning', 'evening']) if (d[k] && get('SELECT name FROM tasks WHERE id = ?', Number(d[k]))?.name === taskName) return k;
+  return null;
+};
+
+// All notes not yet shown, as one card (bodies get shorter the more notes there are).
+async function sendPendingCard() {
+  const seen = announced();
+  const fresh = listPending().map((n) => n.file).filter((f) => !seen[f]).slice(0, 12);
+  if (!fresh.length || !ownerId()) return;
+  const { text, kb } = pendingCard(fresh);
+  await sendOwner(text, { reply_markup: kb, disable_notification: true });
+  markAnnounced(fresh);
+}
+
 let pendingTimer = null;
 function announcePending() {
   clearTimeout(pendingTimer);
+  if (digestTasks().evening) return; // shown with the evening message
   // A minute of quiet, so the nightly digest's several notes come as one card.
   pendingTimer = setTimeout(async () => {
     const seen = announced();
@@ -279,10 +307,15 @@ function extractButtons(text) {
     if (b) { choices.push(...b[1].split('|').map((x) => x.trim()).filter(Boolean).slice(0, 6)); return false; }
     const c = line.trim().match(/^\[\[(?:копировать|copy):\s*(.+?)\s*\|\s*(.+)\]\]$/i);
     if (c) { copies.push({ label: c[1], text: c[2] }); return false; }
+    if (/^\[\[(?:тихо|quiet)\]\]$/i.test(line.trim())) return false;
     return true;
   });
   return { text: out.join('\n').trim(), choices, copies };
 }
+// A background run with nothing new ends its answer with [[тихо]]: kept in the dashboard only.
+const QUIET_RE = /^\s*\[\[(?:тихо|quiet)\]\]\s*$/im;
+// Background runs: their notify_owner calls wait for the end (one message per run).
+const BACKGROUND = new Set(['ui', 'cron', 'system', 'marketing']);
 
 // Rich message first (Bot API 10.1+, real tables); the old HTML message if Telegram refuses it.
 async function sendAnswer(chatId, md, html, extra = {}) {
@@ -298,7 +331,7 @@ async function sendAnswer(chatId, md, html, extra = {}) {
 
 // First-run interview: the session asks one question at a time and saves the answers to the
 // shared memory, so every later session already knows who it works for.
-const ONBOARDING_PROMPT = `Это первое знакомство с владельцем мейнфрейма. Проведи короткое интервью, чтобы потом работать без лишних вопросов.
+export const ONBOARDING_PROMPT = `Это первое знакомство с владельцем мейнфрейма. Проведи короткое интервью, чтобы потом работать без лишних вопросов.
 Правила: задавай по одному вопросу за сообщение, коротко и по-человечески. После каждого ответа сразу сохраняй факт через mainframe memory_save (без pending) и задавай следующий вопрос. Не больше 10 вопросов. Если человек пишет «хватит» или «потом», заканчивай.
 Темы по порядку:
 1. Как к нему обращаться, где живёт (город и часовой пояс), на каком языке общаться. (type user)
@@ -313,11 +346,23 @@ const ONBOARDING_PROMPT = `Это первое знакомство с влад�
 Начни с короткого приветствия в одну строку и первого вопроса.`;
 
 export function startBot() {
+  if (config.channel === 'max') {
+    botState.status = 'running'; // the owner's channel is MAX (src/max.js has its own state)
+    import('./max.js').then(({ startMax }) => startMax()).catch((e) => addLog('error', `MAX: ${e.message}`));
+    return;
+  }
   if (!config.botToken) {
     botState.status = 'not_configured';
     return;
   }
-  bot = new Bot(config.botToken);
+  // TELEGRAM_API_ROOT: a relay to api.telegram.org (where Telegram is blocked) or a test stub.
+  bot = new Bot(config.botToken, process.env.TELEGRAM_API_ROOT ? { client: { apiRoot: process.env.TELEGRAM_API_ROOT.replace(/\/$/, '') } } : undefined);
+  // A letter from a session leaves only after the owner's button (src/mailbox.js).
+  setMailApprover(async (id, m) => {
+    const kb = new InlineKeyboard().text('📤 Отправить', `ms:${id}:1`).text('Отмена', `ms:${id}:0`);
+    const head = `✉️ <b>Письмо ждёт твоего «да»</b>\nКому: ${esc(m.to)}${m.cc ? `\nКопия: ${esc(m.cc)}` : ''}\nТема: ${esc(m.subject)}`;
+    await sendOwner(`${head}\n<blockquote expandable>${esc(cut(m.body, 3000))}</blockquote>`, { reply_markup: kb, disable_notification: false });
+  });
 
   // Widgets ask for fresh data (Bot API 10.4): only the owner gets answers.
   bot.use(async (ctx, next) => {
@@ -325,6 +370,23 @@ export function startBot() {
     if (!q) return next();
     await widgets.answerQuery(q, String(q.from?.id) === String(ownerId()));
   });
+  // Setup in the chat (src/chatsetup.js): the port the setup talks through.
+  const tgPort = (chatId) => ({
+    canDelete: true,
+    send: async (text, rows) => (await bot.api.sendMessage(chatId, text, { ...HTML, link_preview_options: { is_disabled: true }, ...(rows ? { reply_markup: { inline_keyboard: rows.map((r) => r.map((b) => (b.url ? { text: b.text, url: b.url } : { text: b.text, callback_data: b.data }))) } } : {}) })).message_id,
+    del: async (id) => { await bot.api.deleteMessage(chatId, id); return true; },
+  });
+  const claimOwner = async (ctx, text) => {
+    if (!(await chatsetup.claim(tgPort(ctx.chat.id), ctx.from, text))) return;
+    kvSet('owner_tg_id', String(ctx.from.id));
+    await updateMenuButton().catch(() => {});
+  };
+  // A fresh bot installed with CHAT_SETUP=on: the first person who writes in private is the owner.
+  bot.use(async (ctx, next) => {
+    if (ownerId() || !chatsetup.chatSetupOn() || ctx.chat?.type !== 'private' || !ctx.message || !ctx.from) return next();
+    return claimOwner(ctx, ctx.message.text || '');
+  });
+
   bot.command('start', async (ctx) => {
     const code = (ctx.match || '').trim();
     if (!ownerId()) {
@@ -332,7 +394,8 @@ export function startBot() {
         kvSet('owner_tg_id', String(ctx.from.id));
         addLog('system', `Бот привязан к ${ctx.from.username || ctx.from.id}`);
         await updateMenuButton();
-        await sendMenu(ctx.chat.id, '🔗 <b>Бот привязан к тебе.</b> Меню внизу, задачи пиши прямо сюда.');
+        const hi = config.owner?.name && config.owner.name !== 'владелец' ? `, ${esc(config.owner.name)}` : '';
+        await sendMenu(ctx.chat.id, `👋 <b>Привет${hi}! Я твой помощник.</b> Теперь я слушаюсь только тебя. Меню внизу, задачи пиши прямо сюда текстом или голосом.`);
         // A fresh install: get to know the owner right away.
         if (!listMemory().length) {
           const p = currentProject();
@@ -370,6 +433,26 @@ export function startBot() {
     return next();
   });
 
+  // While the setup in the chat runs, the owner's messages and its buttons go to it.
+  bot.use(async (ctx, next) => {
+    if (!chatsetup.chatSetupOn() || chatsetup.setupStep() === 'done') return next();
+    const port = tgPort(ctx.chat.id);
+    const data = ctx.callbackQuery?.data;
+    try {
+      if (data?.startsWith('cs:')) { await ctx.answerCallbackQuery().catch(() => {}); await chatsetup.onButton(port, data); return; }
+      if (ctx.callbackQuery) return next();
+      const text = ctx.message?.text;
+      if (!text) { if (ctx.message) await ctx.reply('Пока идёт настройка, ответь, пожалуйста, текстом.'); return; }
+      const r = await chatsetup.onText(port, text, ctx.message.message_id);
+      if (r?.done) {
+        await sendMenu(ctx.chat.id, '⌨️ Меню внизу, задачи пиши прямо сюда.');
+        const p = currentProject();
+        const runId = startRun({ projectId: p.id, prompt: ONBOARDING_PROMPT, origin: 'bot' });
+        await trackRun(runId, ctx.chat.id, null, p);
+      }
+    } catch (e) { await ctx.reply(`⚠️ ${esc(e.message)}`, HTML).catch(() => {}); }
+  });
+
   bot.command('menu', async (ctx) => { await sendMenu(ctx.chat.id); return showScreen(ctx, 'home'); });
   bot.command('app', (ctx) => (config.publicUrl?.startsWith('https://')
     ? ctx.reply('📱 Пульт:', { reply_markup: new InlineKeyboard().webApp('Открыть пульт', config.publicUrl) })
@@ -393,6 +476,19 @@ export function startBot() {
     const runId = startRun({ projectId: p.id, prompt: `${ONBOARDING_PROMPT}\nВ памяти уже есть заметки (mainframe memory_list): не спрашивай то, что там уже есть, уточни только пробелы.`, origin: 'bot' });
     await trackRun(runId, ctx.chat.id, null, p);
   });
+  // Which model works now, and a switch between providers. Keys are never sent here: only in the
+  // dashboard (System → Model) or .env, a key in a chat would stay in its history.
+  const modelScreen = () => {
+    const m = modelState();
+    const lines = [`🧠 <b>Модель:</b> ${esc(m.name)}`, `Основная: <code>${esc(m.main || '·')}</code>${m.fast && m.fast !== m.main ? `\nБыстрая: <code>${esc(m.fast)}</code>` : ''}`];
+    if (!m.ready) lines.push('', '⚠️ Не хватает ключа или модели: задай их в пульте, «Система → Модель».');
+    if (!m.connectors) lines.push('', 'Коннекторы claude.ai (Gmail, Календарь, Drive, Metricool) с этим провайдером не работают.');
+    lines.push('', '<i>Ключ вводится только в пульте, не присылай его сюда.</i>');
+    const kb = new InlineKeyboard();
+    m.providers.filter((x) => x.id !== 'custom').forEach((x, i) => { kb.text(`${x.id === m.provider ? '✓ ' : ''}${x.name.replace(/\s*\(.*\)/, '')}`, `mdl:${x.id}`); if (i % 2 === 1) kb.row(); });
+    return { text: lines.join('\n'), kb };
+  };
+  bot.command('model', async (ctx) => { const m = modelScreen(); return ctx.reply(m.text, { ...HTML, reply_markup: m.kb }); });
   bot.command('memory', async (ctx) => { const m = memoryScreen(); return ctx.reply(m.text, { ...HTML, ...(m.kb.inline_keyboard.length ? { reply_markup: m.kb } : {}) }); });
   bot.command('stop', async (ctx) => { stopAll(); return ctx.reply('⏹ <b>Всё остановил.</b> Автоматика на паузе.', { ...HTML, reply_markup: new InlineKeyboard().text('▶️ Включить', 'sys:resume').success() }); });
   bot.command('resume', async (ctx) => { resumeAll(); return ctx.reply('▶️ Автоматика включена.'); });
@@ -459,7 +555,7 @@ export function startBot() {
     try {
       await ctx.replyWithChatAction('typing');
       const file = await ctx.getFile();
-      const url = `https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`;
+      const url = `${(process.env.TELEGRAM_API_ROOT || 'https://api.telegram.org').replace(/\/$/, '')}/file/bot${config.botToken}/${file.file_path}`;
       const res = await fetch(url).catch(() => new Promise((r) => setTimeout(r, 3000)).then(() => fetch(url)));
       if (!res.ok) throw new Error(`Telegram не отдал файл (${res.status})`);
       const typing = setInterval(() => ctx.replyWithChatAction('typing').catch(() => {}), 5000);
@@ -483,7 +579,7 @@ export function startBot() {
     let file;
     try {
       const f = await ctx.getFile();
-      const res = await fetch(`https://api.telegram.org/file/bot${config.botToken}/${f.file_path}`);
+      const res = await fetch(`${(process.env.TELEGRAM_API_ROOT || 'https://api.telegram.org').replace(/\/$/, '')}/file/bot${config.botToken}/${f.file_path}`);
       if (!res.ok) throw new Error(`Telegram не отдал файл (${res.status})`);
       const name = ctx.message.document?.file_name || f.file_path.split('/').pop();
       file = saveUpload(name, Buffer.from(await res.arrayBuffer()));
@@ -553,6 +649,11 @@ export function startBot() {
       } else if (kind === 'i') {
         ignoreItem(Number(a));
         await edit(ctx, inboxCard(getItem(Number(a)), 'view'));
+      } else if (kind === 'ms') {
+        const { sent, m } = await decideSend(a, b === '1');
+        toast = sent ? `Отправил: ${m.to}` : 'Письмо не отправлено';
+        await ctx.editMessageReplyMarkup().catch(() => {});
+        await ctx.reply(sent ? `📤 Отправлено: ${esc(m.to)}, «${esc(m.subject)}»` : '🗑 Письмо отменено', HTML);
       } else if (kind === 'x') {
         stopRun(Number(a));
         toast = 'Остановлено';
@@ -596,7 +697,17 @@ export function startBot() {
         await edit(ctx, memoryScreen());
       } else if (kind === 'cpok' || kind === 'cpx' || kind === 'cpn' || kind === 'cpd') {
         toast = await contentCallback(kind, a);
-        await ctx.editMessageReplyMarkup().catch(() => {});
+        // In the morning message only the tapped post's row goes; other buttons stay.
+        const rows = (ctx.callbackQuery.message?.reply_markup?.inline_keyboard || []).filter((r) => !r.some((x) => /^cp[xn]:/.test(x.callback_data || '') && x.callback_data.split(':')[1] === String(a)));
+        const keep = kind !== 'cpok' && kind !== 'cpd' && rows.length;
+        await ctx.editMessageReplyMarkup(keep ? { reply_markup: { inline_keyboard: rows } } : undefined).catch(() => {});
+      } else if (kind === 'mdl') {
+        const cur = modelState();
+        if (a !== 'claude' && a !== cur.provider && !cur.keySet) throw new Error('Сначала введи ключ этого провайдера в пульте: Система → Модель');
+        saveModelSettings({ provider: a });
+        const m = modelScreen();
+        toast = a === 'claude' ? 'Модель: Claude' : 'Провайдер сменён. Проверь ключ кнопкой «Проверить» в пульте';
+        await ctx.editMessageText(m.text, { ...HTML, reply_markup: m.kb }).catch(() => {});
       } else if (kind === 'sys') {
         if (a === 'stop') { stopAll(); toast = 'Всё остановлено'; } else { resumeAll(); toast = 'Автоматика включена'; }
         await edit(ctx, await screen('sys'));
@@ -634,11 +745,21 @@ export function startBot() {
   });
   announcePending();
 
-  onRunFinished(async (r, project) => {
+  onRunFinished(async (r0, project) => {
+    let r = r0;
     const t = untrack(r.id);
     if (t?.inflight) await t.inflight.catch(() => {});
     if (t?.msgId) await bot.api.deleteMessage(Number(t.chatId), t.msgId).catch(() => {});
-    if (!ownerId() || r.inbox_id || r.origin === 'ui') return;
+    if (!ownerId() || r.inbox_id) return;
+    // Messages a background run kept back (notify_owner without urgent): they end in this one message.
+    const held = BACKGROUND.has(r.origin) ? all("SELECT content FROM run_events WHERE run_id = ? AND kind = 'notify' ORDER BY id", r.id).map((x) => x.content) : [];
+    // A run from the dashboard answers there; Telegram hears from it only if it meant to tell the owner.
+    if (r.origin === 'ui' && !held.length) return;
+    if (r.origin !== 'bot' && r.status === 'done' && QUIET_RE.test(r.result || '')) {
+      addLog('run', `[${project.name}] итог без новостей, в чат не отправляю`, r.id);
+      return;
+    }
+    if (held.length && !String(r.result || '').trim()) r = { ...r, result: held[held.length - 1] };
     const chat = t?.chatId || ownerId();
     if (t) react(chat, t.userMsgId, r.status === 'done' ? '👍' : r.status === 'stopped' ? '🤷' : '😢');
     // A scheduled task that says exactly the same as its last report within a day stays quiet.
@@ -652,13 +773,35 @@ export function startBot() {
       }
       kvSet('cron_last_report', { ...sent, [task]: { text: norm, at: Date.now() } });
     }
-    const { text, md, kb } = resultMessage(r, project);
+    const digest = digestKind(task);
+    const { text, md: md0, kb } = resultMessage(r, project);
+    let md = md0;
+    if (digest === 'morning') {
+      // Today's posts with their buttons (they used to come as a separate card at 8:30).
+      const p = todayPosts();
+      if (p) { md += `\n\n${p.md}`; kb.inline_keyboard = [...kb.inline_keyboard.filter((x) => x.length), ...p.rows]; }
+    }
+    if (digest === 'evening') {
+      const a = alertsDigest();
+      if (a) md += `\n\n${a}`;
+      // The memory digest task (digest_tasks.memory) runs before it: its first line joins the evening.
+      const memTask = digestTasks().memory && get('SELECT name FROM tasks WHERE id = ?', Number(digestTasks().memory))?.name;
+      const mem = memTask && get("SELECT result FROM runs WHERE origin = 'cron' AND status = 'done' AND started_at > ? AND prompt LIKE ? ORDER BY id DESC LIMIT 1", Date.now() - 12 * 3600000, `[Задача по расписанию «${memTask}»]%`);
+      const memLine = String(mem?.result || '').split('\n').map((x) => x.trim()).find((x) => x && !QUIET_RE.test(x));
+      if (memLine) md += `\n\n${memLine.slice(0, 400)}`;
+    }
     const long = r.finished_at - r.started_at > 60000;
     const msg = await sendAnswer(chat, md, text, { ...(kb.inline_keyboard.length ? { reply_markup: kb } : {}), ...(r.status === 'done' && long ? { message_effect_id: EFFECT_DONE } : {}) });
     remember(msg, { projectId: project.id });
+    if (digest === 'evening') await sendPendingCard().catch((e) => addLog('error', `Память, карточка: ${e.message.slice(0, 120)}`));
   });
 
-  setMainframeHandlers({ notify: (md) => {
+  setMainframeHandlers({ notify: async (md, { runId = null, urgent = false } = {}) => {
+    const r = runId ? get('SELECT origin, status FROM runs WHERE id = ?', runId) : null;
+    if (r && BACKGROUND.has(r.origin) && !urgent && ['running', 'queued'].includes(r.status)) {
+      addEvent(runId, 'notify', String(md).slice(0, 4000));
+      return 'held';
+    }
     const { text, choices, copies } = extractButtons(String(md));
     const kb = new InlineKeyboard();
     choices.forEach((c, i) => { kb.text(c.slice(0, 40), `ask:${tok({ text: c, projectId: currentProject().id })}`); if (i % 2 === 1) kb.row(); });
@@ -677,6 +820,7 @@ export function startBot() {
     { command: 'social', description: 'Соцсети и советы' },
     { command: 'tasks', description: 'Задачи по расписанию' },
     { command: 'memory', description: 'Память: что я знаю, одобрить новое' },
+    { command: 'model', description: 'Модель: какая работает, сменить провайдера' },
     { command: 'setup', description: 'Знакомство: рассказать о себе' },
     { command: 'app', description: 'Открыть пульт' },
     { command: 'new', description: 'Новый проект: Название | путь' },

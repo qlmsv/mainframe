@@ -23,8 +23,32 @@ body{margin:0;font:14px/1.35 -apple-system,system-ui,sans-serif;color:var(--t)}
 .l{padding:5px 0;border-top:1px solid var(--c)}.l:first-child{border-top:0}
 .fade{animation:f .4s ease both}@keyframes f{from{opacity:0;transform:translateY(4px)}}`;
 
+
+// The assistant's face (same drop as public/spark.js), for widgets: plain SVG, state by class.
+const SPARK_CSS = `.spk{flex:none;overflow:visible}.spk *{transform-box:fill-box;transform-origin:center}
+.spk .bz{transform-box:view-box;transform-origin:50% 88%;animation:sb 3.4s ease-in-out infinite}@keyframes sb{50%{transform:scale(1.03,.98)}}
+.spk .gl{animation:sg 3.4s ease-in-out infinite}@keyframes sg{50%{opacity:.55;transform:scale(1.06)}}
+.spk .fx,.spk .hp{opacity:0;transition:opacity .3s}.spk .ey{transition:opacity .2s}
+.spk.thinking .ft,.spk.working .fw,.spk.done .hp,.spk.done .fd,.spk.waiting .fr,.spk.error .fe{opacity:1}.spk.done .ey{opacity:0}
+.spk .ft circle{animation:sd 1.1s infinite}.spk .ft circle:nth-child(2){animation-delay:.15s}.spk .ft circle:nth-child(3){animation-delay:.3s}@keyframes sd{50%{transform:translateY(-3px);opacity:.35}}
+.spk .ob{transform-box:view-box;transform-origin:50px 58px;animation:so 2.2s linear infinite}@keyframes so{to{transform:rotate(360deg)}}
+.spk.working .bz{animation:sw .9s ease-in-out infinite}@keyframes sw{50%{transform:translateY(-2px) rotate(-2deg)}}
+.spk.error .cr{filter:saturate(.35)}.spk.error .bz{transform:rotate(-8deg);animation:none}
+.spk .rg{animation:sr 1.6s ease-out infinite}@keyframes sr{0%{transform:scale(.7);opacity:.7}100%{transform:scale(1.35);opacity:0}}
+.spk .ey ellipse{animation:bl 4.5s infinite}@keyframes bl{0%,96%,100%{transform:scaleY(1)}98%{transform:scaleY(.12)}}`;
+const SPARK = (size, id = 'spk') => `<svg id="${id}" class="spk" width="${size}" height="${size}" viewBox="0 0 100 100"><defs><radialGradient id="${id}a" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#fff6ee"/><stop offset=".45" stop-color="#fbe6da"/><stop offset="1" stop-color="#e2602b"/></radialGradient><radialGradient id="${id}b"><stop offset=".55" stop-color="#e2602b" stop-opacity=".35"/><stop offset="1" stop-color="#e2602b" stop-opacity="0"/></radialGradient></defs>
+<circle class="gl" cx="50" cy="56" r="44" fill="url(#${id}b)"/><circle class="fx fr rg" cx="50" cy="58" r="30" fill="none" stroke="#e2602b" stroke-width="3"/>
+<g class="bz"><path class="cr" d="M50 20q22 22 22 38a22 22 0 0 1-44 0q0-16 22-38z" fill="url(#${id}a)"/><path d="M38 50q2-8 8-12" stroke="#fff" stroke-width="3" stroke-linecap="round" fill="none" opacity=".7"/>
+<g class="ey"><ellipse cx="43" cy="60" rx="3.8" ry="5.2" fill="#141414"/><ellipse cx="57" cy="60" rx="3.8" ry="5.2" fill="#141414"/></g>
+<g class="hp" stroke="#141414" stroke-width="3.2" stroke-linecap="round" fill="none"><path d="M38.5 62q4.5-6 9 0"/><path d="M52.5 62q4.5-6 9 0"/></g>
+<path d="M47 69q3 2.5 6 0" stroke="#141414" stroke-width="2.2" stroke-linecap="round" fill="none"/></g>
+<g class="fx ft" fill="#8a8f98"><circle cx="68" cy="22" r="3.2"/><circle cx="76" cy="22" r="3.2"/><circle cx="84" cy="22" r="3.2"/></g>
+<g class="fx fw"><g class="ob"><circle cx="50" cy="20" r="3.6" fill="#e2602b"/><circle cx="83" cy="66" r="3" fill="#21a366"/><circle cx="18" cy="70" r="2.6" fill="#e2602b"/></g></g>
+<g class="fx fd" fill="#e2602b"><path d="M14 26l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/><path d="M86 22l1.6 4 4 1.6-4 1.6-1.6 4-1.6-4-4-1.6 4-1.6z"/></g>
+<text class="fx fe" x="70" y="30" font-family="system-ui" font-weight="800" font-size="22" fill="#e2602b">?</text></svg>`;
+
 // Live data: render(d) draws; on open and every `every` seconds the widget asks the bot for kind.
-export const page = (body, render, kind, every) => `<!doctype html><html><head><style>${CSS}</style></head><body><div class="w" id="w">${body}</div><script>
+export const page = (body, render, kind, every) => `<!doctype html><html><head><style>${CSS}${SPARK_CSS}</style></head><body><div class="w" id="w">${body}</div><script>
 const W=TelegramWidget;let D={};try{D=JSON.parse(W.chatData||'{}')}catch(e){}
 ${render}
 function fitTiles(){document.querySelectorAll('.tile b').forEach(b=>{let f=15;b.style.fontSize='';while(b.scrollWidth>b.clientWidth+1&&f>10){f-=.5;b.style.fontSize=f+'px'}})}
@@ -44,10 +68,10 @@ export const fit = (obj) => { let s = JSON.stringify(obj); while (Buffer.byteLen
 function shrink(o) { for (const k of Object.keys(o)) if (Array.isArray(o[k]) && o[k].length > 1) { o[k] = o[k].slice(0, -1); return o; } return o; }
 
 // ---------- 1. «Работаю…» while a session runs ----------
-export const PROGRESS = page(`<div class="row"><div id="orb" style="width:34px;height:34px;border-radius:50%;background:conic-gradient(var(--a),#ffb36b,#a58bff,var(--a));animation:s 2.4s linear infinite"></div>
+export const PROGRESS = page(`<div class="row">${SPARK(40)}
 <div class="sp"><div class="b" id="what"></div><div class="m" id="sub"></div></div><div class="big" id="clock" style="font-size:18px"></div></div>
-<div class="m fade" id="last" style="margin-top:6px"></div><style>@keyframes s{to{transform:rotate(360deg)}}</style>`,
-`function render(d){const e=document.getElementById.bind(document);e('what').textContent=(d.e||'💭')+' '+(d.w||'Думаю');
+<div class="m fade" id="last" style="margin-top:6px"></div>`,
+`function render(d){const e=document.getElementById.bind(document);e('spk').setAttribute('class','spk '+(d.n?'working':'thinking'));e('what').textContent=d.w||'Думаю';
 e('sub').textContent=(d.p?d.p+' · ':'')+(d.n?'шаг '+d.n:'начинаю');const l=e('last');if(l.textContent!==(d.l||'')){l.textContent=d.l||'';l.classList.remove('fade');void l.offsetWidth;l.classList.add('fade')}}
 setInterval(()=>{const s=Math.max(0,Math.floor((Date.now()-(D.t0||Date.now()))/1000));document.getElementById('clock').textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0')},1000);`, null, 0);
 
@@ -99,7 +123,7 @@ export async function moneyData() {
 }
 
 // ---------- 5. «Мейнфрейм сейчас» board ----------
-const BOARD = page('', `function render(d){const w=document.getElementById('w');const dot=(ok,t)=>'<span class="tile" style="flex:none;padding:4px 8px">'+(ok?'🟢':'🔴')+' '+t+'</span>';w.innerHTML='<div class="row"><div class="sp b">🧠 Мейнфрейм сейчас</div><span class="m">'+(d.tm||'')+'</span></div>'
+const BOARD = page('', `const SPK=${JSON.stringify(SPARK(30))};function render(d){const w=document.getElementById('w');const dot=(ok,t)=>'<span class="tile" style="flex:none;padding:4px 8px">'+(ok?'🟢':'🔴')+' '+t+'</span>';w.innerHTML='<div class="row">'+SPK.replace('class="spk"','class="spk '+(d.r?'working':d.i?'waiting':'')+'"')+'<div class="sp b">Мейнфрейм сейчас</div><span class="m">'+(d.tm||'')+'</span></div>'
 +'<div class="row" style="margin:8px 0">'+[['В работе',d.r],['Ждут тебя',d.i],['За сегодня',d.d]].map(x=>'<div class="tile"><span class="m">'+x[0]+'</span><b>'+(x[1]??0)+'</b></div>').join('')+'</div>'
 +(d.n||[]).map(x=>'<div class="l fade">⚙️ '+x+'</div>').join('')
 +'<div class="row" style="flex-wrap:wrap;margin-top:6px">'+dot(d.mac,'Mac')+dot(d.tg,'Telegram')+dot(d.cl,'Claude')+'</div>'}`, 'board', 15);
@@ -153,12 +177,13 @@ export async function sendProgress(chatId, state) {
 }
 export const editProgress = (chatId, msgId, state) => api.raw.editMessageWidgetData({ chat_id: chatId, message_id: msgId, chat_data: JSON.stringify(state) });
 
-// The card of the day comes by itself at 8:00 local time.
+// The card of the day comes by itself at 8:00 local time, unless a morning digest task does the
+// morning (kv digest_tasks.morning): then it is only on /day.
 export function startDayCard(ownerId) {
   setInterval(async () => {
     const d = new Date(Date.now() + LOCAL_OFFSET());
     const key = d.toISOString().slice(0, 10);
-    if (d.getUTCHours() !== 8 || kvGet('widget_day_sent', '') === key || !ownerId()) return;
+    if (d.getUTCHours() !== 8 || kvGet('widget_day_sent', '') === key || !ownerId() || kvGet('digest_tasks', {}).morning) return;
     kvSet('widget_day_sent', key);
     await sendWidget(Number(ownerId()), 'day').catch((e) => addLog('error', `Карточка дня: ${e.message.slice(0, 120)}`));
   }, 60000).unref();

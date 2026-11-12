@@ -8,6 +8,9 @@ import { recallHybrid, recallOpen, formatRecall } from './recall.js';
 import { MAC_SERVERS } from './routing.js';
 import { addRule, listRules, deleteRule, previewRule, ACTIONS } from './inbox-rules.js';
 import { moduleTools } from './modules.js';
+import { serverBrowserMcp, bridgeOnline } from './modes.js';
+import { mailboxConfigured, mailServer } from './mailbox.js';
+import { googleMcp } from './google.js';
 
 const handlers = {
   notify: async () => { throw new Error('Бот не настроен'); },
@@ -63,14 +66,20 @@ async function ruleFromArgs(a) {
 }
 
 // A fresh in-process server per query: instances are not shared between sessions.
-function mainframeServer() {
+// runId: the run this server belongs to. A background run (not the owner's own chat) does not
+// ping the owner with every stage: its notify_owner calls are kept as run events and the owner
+// gets one message when the run ends. urgent goes out at once.
+function mainframeServer(runId = null) {
   return createSdkMcpServer({
     name: 'mainframe',
     version: '0.1.0',
     tools: [
-      tool('notify_owner', 'Отправить владельцу сообщение в его бот управления (итог, вопрос, напоминание).',
-        { text: z.string().describe('Текст сообщения') },
-        async ({ text: t }) => { await handlers.notify(t); return text('Отправлено владельцу'); }),
+      tool('notify_owner', 'Сообщение владельцу в бот. В его разговоре в чате приходит сразу. Из фоновой задачи (по расписанию, из пульта, из другой сессии) не шли этапы и «готово»: обычный вызов не отправляется сразу, а копится, и владелец получит одно сообщение с итогом задачи, когда она закончится. urgent: true только когда нужно решение владельца прямо сейчас или сломалось важное (бот, сайт, оплата, деньги): такое уходит сразу.',
+        {
+          text: z.string().describe('Текст сообщения'),
+          urgent: z.boolean().optional().describe('Отправить сразу из фоновой задачи: нужно решение прямо сейчас или сломалось важное'),
+        },
+        async ({ text: t, urgent }) => { const r = await handlers.notify(t, { runId, urgent: Boolean(urgent) }); return text(r === 'held' ? 'Сохранено: владелец получит это одним сообщением с итогом, когда задача закончится' : 'Отправлено владельцу'); }),
       tool('create_cron_task', 'Создать задачу по расписанию в мейнфрейме. cron в формате "мин час день месяц день_недели", часовой пояс сервера.',
         {
           name: z.string(),
@@ -164,10 +173,19 @@ function mainframeServer() {
 
 // mac=false leaves out the Mac, app and browser servers (apple, computer, chrome, jev, cua):
 // they stay in mcp.json, they are just not started for a session that doesn't need them.
-export function buildMcpServers({ mac = true } = {}) {
+// mac: the work is about the computer, browser, mail or calendar (src/routing.js chooseTools).
+export function buildMcpServers({ mac = true, connectors = false, runId = null } = {}) {
   const skip = mac ? [] : MAC_SERVERS;
-  const servers = { ...Object.fromEntries(Object.entries(readMcpConfig()).filter(([n]) => !skip.includes(n))), mainframe: mainframeServer() };
+  const servers = { ...Object.fromEntries(Object.entries(readMcpConfig()).filter(([n]) => !skip.includes(n))), mainframe: mainframeServer(runId) };
   if (config.tg.enabled) servers.telegram = { type: 'http', url: config.tg.url };
+  if (mac) {
+    // The browser on the server: when there is no computer browser, or the computer is off.
+    const sb = serverBrowserMcp();
+    if (sb && !servers.browser && (!servers.chrome || !bridgeOnline('chrome'))) { servers.browser = sb; delete servers.chrome; }
+    // Mail over IMAP/SMTP and Google (Calendar, Drive, Docs, Sheets): work with any model.
+    if (mailboxConfigured()) servers.mail = mailServer();
+  }
+  if (mac || connectors) { const g = googleMcp(); if (g && !servers.google) servers.google = g; }
   return servers;
 }
 

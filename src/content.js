@@ -500,7 +500,8 @@ export function startContent() {
       } catch (e) { await notifyOwner(`⚠️ Пост #${p.id} не вышел: ${esc(e.message.slice(0, 200))}`); }
     }
     const d = new Date();
-    if (d.getHours() === 8 && d.getMinutes() >= 30 && kvGet('content_digest_day', '') !== day()) {
+    // With a morning digest task, today's posts come inside it (todayPosts), not as their own card.
+    if (!kvGet('digest_tasks', {}).morning && d.getHours() === 8 && d.getMinutes() >= 30 && kvGet('content_digest_day', '') !== day()) {
       kvSet('content_digest_day', day());
       const end = new Date(d); end.setHours(23, 59, 59, 999);
       const today = all("SELECT * FROM content_posts WHERE status IN ('scheduled', 'metricool_draft') AND scheduled_at BETWEEN ? AND ? ORDER BY scheduled_at", Date.now(), end.getTime());
@@ -518,6 +519,20 @@ export function startContent() {
   };
   setTimeout(tick, 20000);
   setInterval(tick, 60000).unref();
+}
+
+// Today's posts for the morning digest: a Markdown block and the «Снять» / «Сейчас» buttons.
+export function todayPosts() {
+  const d = new Date();
+  const end = new Date(d); end.setHours(23, 59, 59, 999);
+  const today = all("SELECT * FROM content_posts WHERE status IN ('scheduled', 'metricool_draft') AND scheduled_at BETWEEN ? AND ? ORDER BY scheduled_at", d.getTime(), end.getTime());
+  if (!today.length) return null;
+  kvSet('content_digest_day', day());
+  const hm = (t) => new Date(t).toTimeString().slice(0, 5);
+  const md = `**🗓 Посты на сегодня**\n${today.map((p) => `- ${hm(p.scheduled_at)} ${NETWORKS[p.network]}${DIRECT.has(p.network) ? '' : ' (Metricool)'}: ${p.text.replace(/\s+/g, ' ').slice(0, 90)}…`).join('\n')}`;
+  const rows = today.filter((p) => DIRECT.has(p.network) && p.status === 'scheduled')
+    .map((p) => [{ text: `⏸ Снять ${NETWORKS[p.network]} ${hm(p.scheduled_at)}`, callback_data: `cpx:${p.id}` }, { text: '🚀 Сейчас', callback_data: `cpn:${p.id}` }]);
+  return { md, rows };
 }
 
 // Buttons of the morning message.

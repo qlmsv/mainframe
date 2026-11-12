@@ -9,6 +9,7 @@ import { all, get, run, now, addLog, kvGet, kvSet, redact } from './db.js';
 import { bus } from './bus.js';
 import { buildMcpServers } from './mcp.js';
 import { chooseModel, chooseTools } from './routing.js';
+import { sessionEnv, resolveModel, isClaude, mainModel } from './models.js';
 
 const active = new Map(); // runId -> { abort, projectId, fork, startedAt }
 const forks = new Set(); // runIds started beside a busy session (owner's bot messages)
@@ -31,6 +32,7 @@ const MAINFRAME_PROMPT = `
 Кнопки: если в конце ты ждёшь решения владельца с понятными вариантами, последней строкой напиши [[кнопки: Вариант 1 | Вариант 2 | Вариант 3]] (до 4 коротких вариантов, первый рекомендуемый; нажатие пришлёт этот текст тебе как ответ). Для ссылки или текста, который удобно скопировать: отдельной строкой [[копировать: Подпись | текст]]. Сам вопрос оставь в тексте.
 Входящие: на «не показывай / тихо / пакетом / срочно про X» сначала mainframe inbox_rule_preview, покажи владельцу, сколько и что отсеется за 7 дней (с примерами), и сохраняй inbox_rule_add только после его «да». Список и удаление: inbox_rule_list, inbox_rule_delete.
 Память и история: «запомни…» от владельца сохраняй сразу через mainframe memory_save и отвечай одной строкой, что запомнил; «забудь…» через memory_delete; «что ты помнишь про X» и вопросы о прошлом («что решили», «что писал», «когда обсуждали») сначала ищи через mainframe recall (история всех сессий, входящих, почты и переписки в Telegram), потом отвечай с датами.
+Фоновые задачи (по расписанию, из пульта, из другой сессии): этапы и «готово» через notify_owner не шли, владелец получит одно сообщение с итогом задачи, когда она закончится. notify_owner с urgent: true только когда нужно решение владельца прямо сейчас или сломалось важное. Если у задачи по расписанию нет новостей для владельца (всё как обычно, ничего не случилось), последней строкой ответа напиши [[тихо]]: итог останется в пульте, в чат не придёт.
 Если менял код самого мейнфрейма (${ROOT}/src), проверь синтаксис (node --check) и вызови mainframe restart_mainframe: он перезапустит мейнфрейм после твоего ответа. Сам службу мейнфрейма не перезапускай (launchctl или systemctl): это оборвёт текущую задачу.
 `.trim();
 
@@ -44,11 +46,12 @@ const INBOX_BLOCKED = [
   'mcp__apple__send_mail', 'mcp__apple__reply_all', 'mcp__apple__forward_mail', 'mcp__apple__mail_reply',
   'mcp__apple__trash_mail', 'mcp__mainframe__create_cron_task',
   'mcp__claude_ai_Gmail__send_message', 'mcp__claude_ai_Gmail__reply', 'mcp__claude_ai_Gmail__forward',
+  'mcp__mail__mail_send', 'mcp__google__manage_event', 'mcp__google__create_event', 'mcp__google__delete_event',
 ];
 
 const AUTH_RE = /Failed to authenticate|OAuth session expired|login reached its time limit|Invalid API key|Please run \/login|auth login/i;
 
-function addEvent(runId, kind, content) {
+export function addEvent(runId, kind, content) {
   const text = typeof content === 'string' ? content : JSON.stringify(content);
   run('INSERT INTO run_events (run_id, kind, content, created_at) VALUES (?, ?, ?, ?)', runId, kind, redact(text.slice(0, 20000)), now());
   bus.change('run_event', runId, { kind });
@@ -69,7 +72,7 @@ function baseOptions({ cwd, abortController, runId, tools = { mac: true, connect
   const options = {
     cwd,
     abortController,
-    mcpServers: buildMcpServers({ mac: tools.mac }),
+    mcpServers: buildMcpServers({ mac: tools.mac, connectors: tools.connectors, runId }),
     settingSources: ['user', 'project', 'local'],
     // Shared memory is read at every run start, so a note saved in one project reaches the next run anywhere.
     systemPrompt: { type: 'preset', preset: 'claude_code', append: `${MAINFRAME_PROMPT}\n${memoryPrompt()}` },
@@ -87,9 +90,12 @@ function baseOptions({ cwd, abortController, runId, tools = { mac: true, connect
     },
   };
   if (config.permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true;
-  if (config.workModel) options.model = config.workModel;
+  options.model = mainModel(config.workModel || undefined);
+  if (!options.model) delete options.model;
   // claude.ai connectors (Notion, Trello, Gmail...) take seconds to connect: off unless named.
-  if (!tools.connectors) options.env = { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' };
+  // Another model provider (MODEL_PROVIDER): its address and key go into the session's environment.
+  const env = sessionEnv(tools.connectors ? {} : { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' });
+  if (env) options.env = env;
   return options;
 }
 
@@ -209,9 +215,13 @@ async function execute(runId, { fork = false } = {}) {
   const recent = all('SELECT prompt FROM runs WHERE project_id = ? AND id < ? AND started_at > ? ORDER BY id DESC LIMIT 3', project.id, runId, Date.now() - 6 * 3600000)
     .map((x) => String(x.prompt || '').slice(0, 2000)).join('\n');
   const tools = chooseTools({ prompt: r.prompt, recent });
-  const pick = chooseModel({ prompt: r.prompt, origin: r.origin });
+  // A resumed (or forked) session keeps the model its last run used: switching loses the cache.
+  const resume = Boolean(project.session_id);
+  const lastModel = resume ? get('SELECT model FROM runs WHERE project_id = ? AND session_id = ? AND model IS NOT NULL AND id < ? ORDER BY id DESC LIMIT 1', project.id, project.session_id, runId)?.model : null;
+  const pick = chooseModel({ prompt: r.prompt, origin: r.origin, resume, lastModel });
   const options = baseOptions({ cwd: project.cwd, abortController, runId, tools });
   if (pick.model) options.model = pick.model;
+  run('UPDATE runs SET model = ? WHERE id = ?', options.model || null, runId);
   addEvent(runId, 'system', `Модель: ${modelName(options.model)} (${pick.why}) · инструменты: ${tools.why}`);
   if (onMac) options.pathToClaudeCodeExecutable = config.macRunner;
   if (project.session_id) options.resume = project.session_id;
@@ -377,7 +387,7 @@ export function kbGuard(root) {
 export async function structured({ prompt, schema, system, cwd = config.kbDir, tools = ['Read', 'Grep', 'Glob'], maxTurns = 8, model = config.dispatchModel }) {
   const root = fs.existsSync(cwd) ? cwd : config.workspaceDir;
   const options = {
-    model,
+    model: resolveModel(model),
     cwd: root,
     maxTurns,
     persistSession: false,
@@ -391,6 +401,8 @@ export async function structured({ prompt, schema, system, cwd = config.kbDir, t
     outputFormat: { type: 'json_schema', schema },
     stderr: (d) => { if (AUTH_RE.test(d)) setAuthError(d); },
   };
+  const env = sessionEnv({ ENABLE_CLAUDEAI_MCP_SERVERS: 'false' });
+  if (env && !isClaude()) options.env = env;
   let out = null;
   let err = null;
   // A hung model call must not block the inbox: give up after 2 minutes.
