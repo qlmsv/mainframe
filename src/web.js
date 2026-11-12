@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { ROOT, config } from './config.js';
 import { all, get, run, now, kvGet, addLog } from './db.js';
 import { bus } from './bus.js';
-import { startRun, stopRun, stopAll, resumeAll, isPaused, activeRuns, claudeSessions, pastMessages } from './agent.js';
+import { startRun, stopRun, stopAll, resumeAll, isPaused, activeRuns, claudeSessions, pastMessages, requestNewSession } from './agent.js';
 import { forwardItem, replyItem, ignoreItem, classify, restoreItem, chatHistory, suggestReply } from './dispatcher.js';
 import { createTask, updateTask, deleteTask, fireTask, nextRuns, validateCron } from './scheduler.js';
 import { mcpSummary } from './mcp.js';
@@ -200,7 +200,7 @@ route('DELETE', '/api/projects/:id', ({ p }) => {
 });
 route('POST', '/api/projects/:id/message', ({ p, body }) => ({ runId: startRun({ projectId: Number(p.id), prompt: body.prompt, origin: 'ui' }) }));
 route('POST', '/api/projects/:id/new-session', ({ p }) => {
-  run('UPDATE projects SET session_id = NULL WHERE id = ?', Number(p.id));
+  requestNewSession(Number(p.id)); // the next message starts it, with a handoff from this one
   bus.change('project', Number(p.id));
   return { ok: true };
 });

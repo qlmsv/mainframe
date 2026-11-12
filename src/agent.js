@@ -31,7 +31,7 @@ const MAINFRAME_PROMPT = `
 Формат ответа: он приходит владельцу в Telegram rich-сообщением, Markdown рендерит сам Telegram. Первая строка или абзац: суть, коротко. Сравнения таблицей. Статусы чек-листом: «- [x] сделано», «- [ ] осталось». Главное выделяй жирным (жёлтое ==выделение== не используй: в тёмной теме его не видно). Длинные подробности прячь в <details><summary>Подробнее</summary> ... </details> (пустая строка после summary и перед </details>). Дату и время встречи пиши так: ![17 ноября, 14:00](tg://time?unix=<unix>&format=wDT), чтобы каждый видел своё время.
 Кнопки: если в конце ты ждёшь решения владельца с понятными вариантами, последней строкой напиши [[кнопки: Вариант 1 | Вариант 2 | Вариант 3]] (до 4 коротких вариантов, первый рекомендуемый; нажатие пришлёт этот текст тебе как ответ). Для ссылки или текста, который удобно скопировать: отдельной строкой [[копировать: Подпись | текст]]. Сам вопрос оставь в тексте.
 Входящие: на «не показывай / тихо / пакетом / срочно про X» сначала mainframe inbox_rule_preview, покажи владельцу, сколько и что отсеется за 7 дней (с примерами), и сохраняй inbox_rule_add только после его «да». Список и удаление: inbox_rule_list, inbox_rule_delete.
-Память и история: «запомни…» от владельца сохраняй сразу через mainframe memory_save и отвечай одной строкой, что запомнил; «забудь…» через memory_delete; «что ты помнишь про X» и вопросы о прошлом («что решили», «что писал», «когда обсуждали») сначала ищи через mainframe recall (история всех сессий, входящих, почты и переписки в Telegram), потом отвечай с датами.
+Память и история: если не уверен, что помнишь договорённость, цифру или решение, сначала mainframe recall, потом отвечай, не угадывай. Новый факт, который отменяет старый (цена, решение, срок), сохраняй через memory_save с replaces: [старая заметка] или исправь старую заметку. «запомни…» от владельца сохраняй сразу через mainframe memory_save и отвечай одной строкой, что запомнил; «забудь…» через memory_delete; «что ты помнишь про X» и вопросы о прошлом («что решили», «что писал», «когда обсуждали») сначала ищи через mainframe recall (история всех сессий, входящих, почты и переписки в Telegram), потом отвечай с датами.
 Фоновые задачи (по расписанию, из пульта, из другой сессии): этапы и «готово» через notify_owner не шли, владелец получит одно сообщение с итогом задачи, когда она закончится. notify_owner с urgent: true только когда нужно решение владельца прямо сейчас или сломалось важное. Если у задачи по расписанию нет новостей для владельца (всё как обычно, ничего не случилось), последней строкой ответа напиши [[тихо]]: итог останется в пульте, в чат не придёт.
 Если менял код самого мейнфрейма (${ROOT}/src), проверь синтаксис (node --check) и вызови mainframe restart_mainframe: он перезапустит мейнфрейм после твоего ответа. Сам службу мейнфрейма не перезапускай (launchctl или systemctl): это оборвёт текущую задачу.
 `.trim();
@@ -170,6 +170,62 @@ function recentSummary(projectId, exceptId) {
   return `(Контекст: в этом чате параллельно идёт другая задача. Последние запросы и ответы:\n${lines.join('\n')})\n\n`;
 }
 
+// ---------- session rotation ----------
+// A live chat (the owner's messages from the bot or the dashboard) does not carry the whole
+// conversation forever: after a long pause, once the context is big, or on /new, the next message
+// starts a fresh session that begins with a short handoff written from the old one.
+const LIVE = new Set(['bot', 'ui']);
+export function requestNewSession(projectId) {
+  const p = get('SELECT session_id FROM projects WHERE id = ?', Number(projectId));
+  if (!p?.session_id) return false;
+  kvSet('session_rotate', { ...kvGet('session_rotate', {}), [projectId]: true });
+  return true;
+}
+const ctxTokens = (sid) => kvGet('session_ctx', {})[sid] || 0;
+function saveCtxTokens(sid, tokens) {
+  const all0 = kvGet('session_ctx', {});
+  all0[sid] = tokens;
+  // Keep the newest 200 sessions.
+  const keys = Object.keys(all0);
+  if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete all0[k];
+  kvSet('session_ctx', all0);
+}
+function rotateReason(project, runId) {
+  const forced = kvGet('session_rotate', {})[project.id];
+  if (forced) return 'по команде';
+  if (!config.sessionRotate) return null;
+  const last = get('SELECT MAX(COALESCE(finished_at, started_at)) t FROM runs WHERE project_id = ? AND session_id = ? AND id != ?', project.id, project.session_id, runId)?.t;
+  if (last && Date.now() - last > config.sessionGapHours * 3600000) return `перерыв больше ${config.sessionGapHours} ч`;
+  const tokens = ctxTokens(project.session_id);
+  if (tokens > config.sessionMaxTokens) return `разговор вырос до ${Math.round(tokens / 1000)} тыс. токенов`;
+  return null;
+}
+// What the new session needs to go on: decisions, open items, the last exchanges, awaited buttons.
+export async function makeHandoff(project, runId) {
+  const rows = all("SELECT id, prompt, result, status, finished_at FROM runs WHERE project_id = ? AND session_id = ? AND id != ? AND status IN ('done','error','stopped') ORDER BY id DESC LIMIT 14", project.id, project.session_id, runId).reverse();
+  if (!rows.length) return '';
+  const clean = (t) => String(t || '').replace(/<mainframe-recall>[\s\S]*?<\/mainframe-recall>/g, '').replace(/\s+/g, ' ').trim();
+  const history = rows.map((x) => `Владелец: ${clean(x.prompt).slice(0, 1200)}\nОтвет: ${clean(x.result).slice(0, 1600)}`).join('\n\n');
+  let summary = '';
+  try {
+    const out = await structured({
+      prompt: `Разговор владельца с помощником (последние обмены, старые сверху):\n\n${history}`,
+      system: 'Ты пишешь передачу дел для новой сессии того же помощника. По-русски, коротко, только факты из разговора, без длинных тире. Разделы: «Решили» (решения и договорённости), «Открыто» (что не доделано, что обещано сделать, что ждёт ответа владельца), «Ждём ответа» (если последний ответ помощника предлагал кнопки или вопрос: какие варианты). Пустой раздел пропусти. Не больше 1500 символов.',
+      schema: { type: 'object', properties: { handoff: { type: 'string' } }, required: ['handoff'] },
+      tools: [], maxTurns: 2,
+    });
+    summary = String(out?.handoff || '');
+    // Too long: cut at a line end, never mid-sentence.
+    if (summary.length > 2200) summary = `${summary.slice(0, 2200).replace(/\n[^\n]*$/, '')}\n…`;
+  } catch (e) { addLog('error', `Передача дел: ${e.message.slice(0, 120)}`); }
+  const last = rows.slice(-3);
+  const lastLines = last.map((x) => `- Владелец: ${clean(x.prompt).slice(0, 300)}\n  Ты: ${clean(x.result).replace(/\[\[[^\]]*\]\]/g, '').slice(0, 400)} (ref: run:${x.id})`).join('\n');
+  // Buttons the last answer offered: the owner may tap one of them next.
+  const buttons = /\[\[(?:кнопки|buttons):\s*(.+?)\]\]/i.exec(String(last[last.length - 1]?.result || ''))?.[1];
+  const refs = rows.slice(0, -3).map((x) => `run:${x.id}`).join(', ');
+  return `<handoff>\nЭто новая сессия этого чата: прошлая закрыта (${project.name}). Передача дел из неё, это контекст, а не новое задание. Если владелец отвечает кнопкой или коротким «да», ориентируйся на «Ждём ответа» и последние обмены. Дословно любой обмен открывается через mainframe recall_open по ref.\n${summary ? `${summary}\n` : ''}${buttons ? `Последний ответ предлагал кнопки: ${buttons}\n` : ''}Последние обмены:\n${lastLines}${refs ? `\nРаньше в этой сессии: ${refs}` : ''}\n</handoff>\n\n`;
+}
+
 function pump(projectId) {
   if ([...active.values()].some((a) => a.projectId === projectId && !a.fork)) return;
   const q = queues.get(projectId) || [];
@@ -211,6 +267,20 @@ async function execute(runId, { fork = false } = {}) {
   run("UPDATE runs SET status = 'running', started_at = ? WHERE id = ?", now(), runId);
   bus.change('run', runId);
 
+  // A fresh session for a live chat that paused long or grew big (see rotateReason).
+  let handoff = '';
+  if (!fork && project.session_id && LIVE.has(r.origin)) {
+    const why = rotateReason(project, runId);
+    if (why) {
+      handoff = await makeHandoff(project, runId).catch(() => '');
+      const flags = kvGet('session_rotate', {});
+      if (flags[project.id]) { delete flags[project.id]; kvSet('session_rotate', flags); }
+      run('UPDATE projects SET session_id = NULL WHERE id = ?', project.id);
+      project.session_id = null;
+      addEvent(runId, 'system', `Новая сессия (${why}), передача дел: ${handoff.length} симв.`);
+      addLog('run', `[${project.name}] новая сессия: ${why}`, runId);
+    }
+  }
   // Model and tools by the task: a short "да" doesn't need Opus, a question about money doesn't need the browser.
   const recent = all('SELECT prompt FROM runs WHERE project_id = ? AND id < ? AND started_at > ? ORDER BY id DESC LIMIT 3', project.id, runId, Date.now() - 6 * 3600000)
     .map((x) => String(x.prompt || '').slice(0, 2000)).join('\n');
@@ -235,6 +305,7 @@ async function execute(runId, { fork = false } = {}) {
   let result = '';
   let cost = null;
   let sessionId = project.session_id;
+  let lastCtx = 0;
   try {
     if (!path.isAbsolute(project.cwd || '')) throw new Error(`Папка проекта должна быть полным путём, сейчас: «${project.cwd || ''}»`);
     if (!fs.existsSync(project.cwd)) fs.mkdirSync(project.cwd, { recursive: true });
@@ -242,8 +313,11 @@ async function execute(runId, { fork = false } = {}) {
     // would break the prompt cache of the whole conversation). Other people's work is skipped.
     let prompt = r.prompt;
     if (fork && !project.session_id) prompt = `${recentSummary(project.id, runId)}${prompt}`;
+    if (handoff) prompt = `${handoff}${prompt}`;
     if (r.origin !== 'inbox') {
-      const ctx = await recallContext(r.prompt, { project: project.name }).catch(() => '');
+      // The last exchange of this chat: a short «да» is searched together with what it answers.
+      const prev = get("SELECT prompt, result FROM runs WHERE project_id = ? AND id < ? AND status = 'done' ORDER BY id DESC LIMIT 1", project.id, runId);
+      const ctx = await recallContext(r.prompt, { project: project.name, context: prev ? `${prev.prompt}\n${prev.result}` : '' }).catch(() => '');
       if (ctx) { prompt = `${ctx}${r.prompt}`; addEvent(runId, 'system', `Подсказки из памяти: ${(ctx.match(/^- /gm) || []).length}`); }
     }
     const q = query({ prompt, options });
@@ -260,6 +334,9 @@ async function execute(runId, { fork = false } = {}) {
         const failed = (m.mcp_servers || []).filter((s) => s.status !== 'connected').map((s) => `${s.name}: ${s.status}`);
         addEvent(runId, 'system', `Сессия запущена · ${m.model}${failed.length ? ` · MCP не подключены: ${failed.join(', ')}` : ''}`);
       } else if (m.type === 'assistant' && !m.parent_tool_use_id) {
+        // How big the conversation is now: everything the model read for this step.
+        const u = m.message?.usage;
+        if (u && sessionId) lastCtx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
         for (const b of m.message?.content || []) {
           if (b.type === 'text' && b.text.trim()) addEvent(runId, 'text', b.text);
           else if (b.type === 'tool_use') addEvent(runId, 'tool', { name: b.name, input: briefInput(b.name, b.input) });
@@ -284,6 +361,7 @@ async function execute(runId, { fork = false } = {}) {
     }
   } finally {
     active.delete(runId);
+    if (lastCtx && sessionId) saveCtxTokens(sessionId, lastCtx);
   }
 
   // The link to the Mac dropped mid-run (tunnel restart, Mac asleep): put the work back once, it

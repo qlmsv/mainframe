@@ -53,6 +53,11 @@ export const config = {
   modelRouting: flag('MODEL_ROUTING', true),
   // Mac/browser MCP servers and claude.ai connectors load only when the request needs them; TOOL_ROUTING=0 loads all.
   toolRouting: flag('TOOL_ROUTING', true),
+  // A live chat starts a fresh session (with a short handoff from the old one) after a long pause
+  // or once the context grows big. SESSION_ROTATE=0 keeps one session forever.
+  sessionRotate: flag('SESSION_ROTATE', true),
+  sessionGapHours: Number(env('SESSION_GAP_HOURS', '3')),
+  sessionMaxTokens: Number(env('SESSION_MAX_TOKENS', '80000')),
   permissionMode: env('PERMISSION_MODE', 'bypassPermissions'),
   autoForward: flag('AUTO_FORWARD'),
   autoReply: flag('AUTO_REPLY'),

@@ -162,12 +162,14 @@ const dot = (a, b) => { let s = 0; for (let i = 0; i < DIM; i++) s += a[i] * b[i
 
 // Best-matching documents by meaning: [{ id, score, chunk }]. Cold model and wait = false: [] at
 // once (the caller falls back to word search) and the model starts loading for next time.
-export async function semanticSearch(query, { limit = 10, wait = true, timeout = 20000 } = {}) {
+// only: a Set of document ids to search among (for example, only memory notes).
+export async function semanticSearch(query, { limit = 10, wait = true, timeout = 20000, only = null } = {}) {
   if (!String(query || '').trim()) return [];
   if (!warm && !wait) { warmUp(); return []; }
   const [q] = await embed([`query: ${String(query).slice(0, 1500)}`], timeout);
   const scored = [];
   for (const [id, pieces] of loadCache()) {
+    if (only && !only.has(id)) continue;
     let best = -1; let chunk = 0;
     for (const p of pieces) { const s = dot(q, p.vec); if (s > best) { best = s; chunk = p.chunk; } }
     scored.push({ id, score: best, chunk });

@@ -3,7 +3,7 @@ import * as widgets from './widgets.js';
 import { config } from './config.js';
 import { all, get, run, now, kvGet, kvSet, addLog } from './db.js';
 import { bus } from './bus.js';
-import { startRun, stopAll, resumeAll, stopRun, onRunFinished, addEvent } from './agent.js';
+import { startRun, stopAll, resumeAll, stopRun, onRunFinished, addEvent, requestNewSession } from './agent.js';
 import { onInboxUpdate, forwardItem, replyItem, ignoreItem, getItem } from './dispatcher.js';
 import { fireTask, updateTask } from './scheduler.js';
 import { alertsDigest } from './alerts.js';
@@ -495,7 +495,12 @@ export function startBot() {
 
   bot.command('new', async (ctx) => {
     const [name, rawCwd] = (ctx.match || '').split('|').map((s) => s.trim());
-    if (!name) return ctx.reply('Формат: <code>/new Название | /путь/к/папке</code>', HTML);
+    // /new alone: a fresh session in the current chat, with a short handoff from the old one.
+    if (!name) {
+      const p = currentProject();
+      const ok = requestNewSession(p.id);
+      return ctx.reply(ok ? `🆕 Следующее сообщение начнёт новую сессию в «${esc(p.name)}» с короткой передачей дел из прошлой.\nНовый проект: <code>/new Название | /путь/к/папке</code>` : `Сессия в «${esc(p.name)}» и так новая.`, HTML);
+    }
     const cwd = rawCwd?.replace(/^~(?=\/)/, process.env.HOME);
     if (cwd && !cwd.startsWith('/')) return ctx.reply('Папка должна быть полным путём: /Users/… или ~/…');
     const res = run('INSERT INTO projects (name, cwd, created_at) VALUES (?, ?, ?)', name, cwd || `${config.workspaceDir}/${name}`, now());
@@ -620,9 +625,9 @@ export function startBot() {
         if (kind === 'sel' && ctx.callbackQuery.message?.text?.startsWith('🧠')) await edit(ctx, projectScreen(Number(a)));
         await sendMenu(ctx.chat.id);
       } else if (kind === 'ns') {
-        run('UPDATE projects SET session_id = NULL WHERE id = ?', Number(a));
+        requestNewSession(Number(a));
         bus.change('project', Number(a));
-        toast = 'Следующее сообщение начнёт новую сессию';
+        toast = 'Следующее сообщение начнёт новую сессию с передачей дел';
       } else if (kind === 'f') {
         await forwardItem(Number(a), { projectId: Number(b) });
         toast = `Отправил в «${get('SELECT name FROM projects WHERE id = ?', Number(b))?.name}»`;
@@ -823,7 +828,7 @@ export function startBot() {
     { command: 'model', description: 'Модель: какая работает, сменить провайдера' },
     { command: 'setup', description: 'Знакомство: рассказать о себе' },
     { command: 'app', description: 'Открыть пульт' },
-    { command: 'new', description: 'Новый проект: Название | путь' },
+    { command: 'new', description: 'Новая сессия (с передачей дел); /new Название | путь: новый проект' },
     { command: 'resume', description: 'Включить автоматику' },
     // Widgets that optional modules bring, for example /trade.
     ...widgets.widgetKinds().filter((k) => !['day', 'money', 'board'].includes(k.kind)).map((k) => ({ command: k.kind, description: String(k.description || k.kind).slice(0, 60) })),
