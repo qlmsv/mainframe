@@ -425,7 +425,7 @@ export async function handleMail(m) {
   if (!contact) run('INSERT INTO contacts (chat_id, name, username, updated_at) VALUES (?, ?, ?, ?)', chatId, m.fromName || m.fromEmail, m.fromEmail, now());
   if (contact?.mode === 'ignore') return;
   const text = `${m.subject}\n\n${(m.body || '').slice(0, 4000)}`.trim();
-  const meta = JSON.stringify({ messageId: m.messageId, folder: m.folder, account: m.account, subject: m.subject, email: m.fromEmail });
+  const meta = JSON.stringify({ messageId: m.messageId, folder: m.folder, account: m.account, subject: m.subject, email: m.fromEmail, ...(m.uid ? { imap: true, uid: m.uid, references: m.references || null } : {}) });
   const res = run(
     'INSERT INTO inbox (source, chat_id, name, username, text, external_id, meta, status, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     'mail', chatId, m.fromName || m.fromEmail || 'Без отправителя', m.fromEmail || null, text, m.externalId, meta, 'new', contact?.project_id ?? null, now(), now(),

@@ -17,3 +17,8 @@ vendor/
 
 # Personal funnel page with real numbers and lead names
 public/journey/
+# Design drafts for the owner's own sites
+public/variants/
+public/variants2/
+public/characters/
+public/shots/

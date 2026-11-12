@@ -4,7 +4,8 @@ import { DATA_DIR, config } from './config.js';
 import { bus } from './bus.js';
 
 export const db = new DatabaseSync(path.join(DATA_DIR, 'mainframe.db'));
-db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+// busy_timeout: a helper script or backup holding the file must make writes wait, not crash the mainframe.
+db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 8000;');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS projects (
@@ -90,6 +91,8 @@ CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 `);
 
 // Columns added after the first release.
+const runCols = db.prepare('PRAGMA table_info(runs)').all().map((c) => c.name);
+if (!runCols.includes('model')) db.exec('ALTER TABLE runs ADD COLUMN model TEXT');
 const inboxCols = db.prepare('PRAGMA table_info(inbox)').all().map((c) => c.name);
 if (!inboxCols.includes('external_id')) db.exec('ALTER TABLE inbox ADD COLUMN external_id TEXT');
 if (!inboxCols.includes('meta')) db.exec('ALTER TABLE inbox ADD COLUMN meta TEXT');
@@ -118,7 +121,8 @@ export function kvSet(key, value) {
 
 export function addLog(kind, message, runId = null) {
   const text = redact(String(message).slice(0, 2000));
-  run('INSERT INTO log (kind, message, run_id, created_at) VALUES (?, ?, ?, ?)', kind, text, runId, now());
+  // The journal must never take the process down (it is called from the crash handlers too).
+  try { run('INSERT INTO log (kind, message, run_id, created_at) VALUES (?, ?, ?, ?)', kind, text, runId, now()); } catch (e) { console.error(`log: ${e.message}`); return; }
   bus.change('log');
 }
 
@@ -145,7 +149,10 @@ setInterval(pruneOld, 86400000).unref();
 // Interrupted runs from a previous process are no longer alive. Called by the main process only:
 // a helper script that imports this module must not mark the live mainframe's queue as stopped.
 export function recoverInterrupted() {
+  // Background work cut off by a crash or restart is returned so it can be picked up again.
+  const cut = all("SELECT id, project_id, prompt, origin, inbox_id, status FROM runs WHERE status IN ('running', 'queued')");
   run("UPDATE runs SET status = 'stopped', finished_at = ? WHERE status IN ('running', 'queued')", now());
   // Messages whose session was cut off go back to the owner instead of hanging "in progress".
   run("UPDATE inbox SET status = 'routed' WHERE status = 'forwarded' AND run_id IN (SELECT id FROM runs WHERE status = 'stopped')");
+  return cut;
 }

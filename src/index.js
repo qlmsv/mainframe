@@ -1,6 +1,6 @@
 import { config } from './config.js';
 import { addLog, all, run, recoverInterrupted, kvGet } from './db.js';
-recoverInterrupted();
+const interrupted = recoverInterrupted();
 import { startWeb, route } from './web.js';
 import { loadModules, registerRoutes, startModules } from './modules.js';
 import { startBot, stopBot, updateMenuButton } from './bot.js';
@@ -18,7 +18,7 @@ import { startMemoryExtract } from './memory-extract.js';
 import { addExpense, listExpenses, financeSummary, rescanInbox, setBalance } from './finance.js';
 import { reloadTasks, createTask } from './scheduler.js';
 import { setMainframeHandlers } from './mcp.js';
-import { activeRuns, onRunFinished } from './agent.js';
+import { activeRuns, onRunFinished, startRun } from './agent.js';
 import { startTunnel, stopTunnel } from './tunnel.js';
 
 // Self-restart for code changes: wait until no session is running, then exit;
@@ -50,6 +50,7 @@ ensureSocialTask();
 reloadTasks();
 startBot();
 startTunnel(() => updateMenuButton());
+import('./modes.js').then(({ watchBridge }) => watchBridge());
 import('./macwatch.js').then(({ watchMacTunnel }) => { if (process.env.MAC_RUNNER) watchMacTunnel(); });
 
 if (config.tg.enabled) {
@@ -60,6 +61,17 @@ if (config.tg.enabled) {
   });
   content.startContent();
   startRecall();
+  // Background tasks (pult, schedule) cut off by the last stop continue by themselves, once.
+  // The owner's chat messages are not repeated: he sees the answer did not come and decides.
+  const RESUME = '(Мейнфрейм перезапустился посреди этой задачи. Продолжи с того места, где остановился, сделанное не повторяй. Проверь git status и файлы, прежде чем менять.)';
+  for (const r of interrupted) {
+    if (!['ui', 'cron'].includes(r.origin) || String(r.prompt).startsWith(RESUME)) continue;
+    try {
+      const prompt = r.status === 'queued' ? r.prompt : `${RESUME}\n\n${r.prompt}`;
+      startRun({ projectId: r.project_id, prompt, origin: r.origin, inboxId: r.inbox_id });
+      addLog('system', `Задача №${r.id} продолжена после перезапуска`);
+    } catch (e) { addLog('error', `Продолжить задачу №${r.id}: ${e.message}`); }
+  }
   startMemory();
   startMemoryExtract();
   watchGroups(async (batch) => { await handleGroupBatch(batch); });

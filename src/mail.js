@@ -8,6 +8,7 @@ import { config } from './config.js';
 import { addLog, kvGet, kvSet, get } from './db.js';
 import { bus } from './bus.js';
 import { readMcpConfig } from './mcp.js';
+import { mailboxConfigured, fetchNew, replyTo } from './mailbox.js';
 
 export const mailState = { status: 'off', lastCheck: null, error: null };
 const setState = (patch) => { Object.assign(mailState, patch); bus.change('mail'); };
@@ -91,10 +92,36 @@ const cleanBody = (s) => String(s || '').replace(/￼/g, '').replace(/[ \t]+\n/g
 let timer = null;
 let busy = false;
 
+// Mail over IMAP (MAIL_ADDRESS in .env, src/mailbox.js): works on any server, no Mac needed.
+function watchImap(onMail) {
+  setState({ status: 'starting' });
+  const tick = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      for (const m of await fetchNew()) {
+        if (get("SELECT id FROM inbox WHERE source = 'mail' AND external_id = ?", m.externalId)) continue;
+        await onMail(m);
+      }
+      setState({ status: 'running', lastCheck: Date.now(), error: null });
+    } catch (e) {
+      const was = mailState.status;
+      setState({ status: 'error', lastCheck: Date.now(), error: e.message.slice(0, 300) });
+      if (was !== 'error') addLog('error', `Почта (IMAP): ${e.message.slice(0, 200)}`);
+    } finally {
+      busy = false;
+    }
+  };
+  tick();
+  timer = setInterval(tick, config.mail.pollSec * 1000);
+  timer.unref();
+}
+
 export function watchMail(onMail) {
   if (!config.mail.enabled) { setState({ status: 'off' }); return; }
+  if (mailboxConfigured()) return watchImap(onMail);
   // A server without a connected Mac has no Apple Mail to read.
-  if (process.platform !== 'darwin' && !readMcpConfig().apple?.url) { setState({ status: 'off', error: 'Почта читается через Mac: подключи его (scripts/install-mac.sh)' }); return; }
+  if (process.platform !== 'darwin' && !readMcpConfig().apple?.url) { setState({ status: 'off', error: 'Почта не подключена: пульт → Ещё → Система → Почта (или подключи Mac)' }); return; }
   setState({ status: 'starting' });
   const tick = async () => {
     if (busy) return;
@@ -139,6 +166,7 @@ export function stopMail() {
 
 // Reply in the same thread, from the account that received the letter.
 export async function mailReply(meta, body) {
+  if (meta.imap) return replyTo({ messageId: meta.messageId, references: meta.references, subject: meta.subject, fromEmail: meta.email }, body);
   const out = await appleCall('reply_all', { message_id: meta.messageId, mailbox: meta.folder, body, include_quote: true, dry_run: false });
   if (out && typeof out === 'object' && (out.error || out.ok === false)) throw new Error(out.error || 'Почта не отправила ответ');
   return out;

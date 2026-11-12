@@ -17,6 +17,7 @@ import { mailState } from './mail.js';
 import { financeSummary, addExpense, deleteExpense, rates } from './finance.js';
 import * as linkedin from './linkedin.js';
 import { clientModules, clientFile } from './modules.js';
+import { modelState, saveModelSettings, testModel } from './models.js';
 import * as content from './content.js';
 import * as memory from './memory.js';
 import { recallHybrid, recallOpen, recallStats } from './recall.js';
@@ -24,6 +25,10 @@ import { saveUpload } from './uploads.js';
 import { channelStats, socialState, refreshReport } from './social.js';
 import { agenda, upcomingReminders, completeReminder, createReminder, createEvent, notesList, noteBody, createNote } from './apple.js';
 
+import * as setup from './setup.js';
+import * as modes from './modes.js';
+import * as mailbox from './mailbox.js';
+import * as google from './google.js';
 const PUBLIC = path.join(ROOT, 'public');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.mp4': 'video/mp4', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
 
@@ -128,6 +133,7 @@ function state(req) {
     offerUrl: config.owner.siteUrl || null,
     owner: config.owner.name,
     currency: config.currency,
+    model: modelState(),
     modules: clientModules(),
   };
 }
@@ -281,8 +287,14 @@ function runProgress(runId) {
     if (m && Number(m[2]) > 1 && Number(m[1]) <= Number(m[2])) return { n: Number(m[1]), m: Number(m[2]), text: text.replace(/[*_#`]/g, '').replace(/\s+/g, ' ').slice(0, 140) };
   }
   const steps = get("SELECT COUNT(*) c FROM run_events WHERE run_id = ? AND kind = 'tool'", runId).c;
-  return { steps };
+  // A background run's last held message (notify_owner kept for the end) shows as its stage.
+  const held = get("SELECT content FROM run_events WHERE run_id = ? AND kind = 'notify' ORDER BY id DESC LIMIT 1", runId)?.content;
+  return held ? { steps, text: held.replace(/\[\[[^\]]*\]\]/g, '').replace(/[*_#`>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140) } : { steps };
 }
+// Model provider (src/models.js): the key is written to .env and never sent back.
+route('GET', '/api/model', () => modelState());
+route('POST', '/api/model', ({ body }) => saveModelSettings({ provider: body.provider, key: body.key, baseUrl: body.baseUrl, main: body.main, fast: body.fast }));
+route('POST', '/api/model/test', ({ body }) => testModel({ provider: body.provider, key: body.key, baseUrl: body.baseUrl, main: body.main, fast: body.fast }));
 route('GET', '/api/home', async () => {
   const running = all(`SELECT r.id, r.status, r.prompt, r.origin, r.started_at, p.name project, p.id project_id FROM runs r JOIN projects p ON p.id = r.project_id
     WHERE r.status IN ('running', 'queued') ORDER BY r.status = 'running' DESC, r.id`).map((r) => ({
@@ -297,8 +309,12 @@ route('GET', '/api/home', async () => {
       const choices = (/\[\[кнопки:\s*(.+?)\]\]/.exec(r.result || '')?.[1] || '').split('|').map((x) => x.trim()).filter(Boolean).slice(0, 4);
       return { id: r.id, project: r.project, project_id: r.project_id, at: r.finished_at, title: (body[0] || '').replace(/[*_#`=]/g, '').slice(0, 140), question: (body[body.length - 1] || '').replace(/[*_#`=]/g, '').slice(0, 160), choices };
     });
+  // Just finished (20 minutes): the home screen shows them as done or failed for a while.
+  const recent = all(`SELECT r.id, r.status, r.prompt, r.started_at, r.finished_at, p.name project, p.id project_id FROM runs r JOIN projects p ON p.id = r.project_id
+    WHERE r.status IN ('done', 'error') AND r.finished_at > ? AND r.origin != 'inbox' ORDER BY r.finished_at DESC LIMIT 3`, Date.now() - 20 * 60000)
+    .map((r) => ({ ...r, prompt: /^\[Задача по расписанию «(.+?)»\]/.test(r.prompt || '') ? `⏰ ${/^\[Задача по расписанию «(.+?)»\]/.exec(r.prompt)[1]}` : String(r.prompt || '').replace(/^\[[^\]]*\]\s*/, '').replace(/\s+/g, ' ').slice(0, 160), progress: {} }));
   return {
-    running, asked,
+    running, asked, recent,
     pendingMemory: memory.listPending().map((n) => ({ name: n.name, title: n.title })),
     inboxOpen: get("SELECT COUNT(*) c FROM inbox WHERE status IN ('new','routed','error','done')").c,
   };
@@ -360,6 +376,29 @@ route('GET', '/api/log', () => all('SELECT * FROM log ORDER BY id DESC LIMIT 200
 route('POST', '/api/stop-all', () => { stopAll(); return { ok: true }; });
 route('POST', '/api/resume', () => { resumeAll(); return { ok: true }; });
 
+// ---------- where it works, the computer bridge, mail and Google (any model) ----------
+const baseUrl = (req) => config.publicUrl || `${isLocal(req) ? 'http' : 'https'}://${req.headers.host}`;
+export function connectState() {
+  const m = mailbox.mailboxState();
+  return { ...modes.modeState(), mail: m, mailPreset: mailbox.presetFor(m.address), google: google.googleState() };
+}
+async function saveMail(body) {
+  const t = await mailbox.testMailbox(body);
+  if (!t.ok) throw new Error(`Почта не подключилась: ${t.error}`);
+  mailbox.saveMailbox(body);
+  return { ...connectState(), test: t };
+}
+route('GET', '/api/connect', () => connectState());
+route('POST', '/api/connect/mode', ({ body }) => { modes.saveMode(body.mode); return connectState(); });
+route('POST', '/api/connect/bridge', ({ req }) => modes.bridgeCommands(baseUrl(req)));
+route('POST', '/api/connect/mail', ({ body }) => saveMail(body));
+route('POST', '/api/connect/mail/preset', ({ body }) => ({ preset: mailbox.presetFor(body.address) }));
+route('POST', '/api/connect/mail/forget', () => { mailbox.forgetMailbox(); return connectState(); });
+route('POST', '/api/connect/google/client', ({ body }) => { google.saveGoogleClient(body); return connectState(); });
+route('POST', '/api/connect/google/start', ({ body }) => google.googleStart(body));
+route('POST', '/api/connect/google/finish', async ({ body }) => { await google.googleFinish(body); return connectState(); });
+route('POST', '/api/connect/google/forget', () => { google.googleForget(); return connectState(); });
+
 // ---------- server ----------
 const CSP = [
   "default-src 'self'",
@@ -395,6 +434,50 @@ function sse(req, res) {
   const ping = setInterval(() => res.write(': ping\n\n'), 25000);
   bus.on('change', onChange);
   req.on('close', () => { clearInterval(ping); bus.off('change', onChange); });
+}
+
+// ---------- first-run wizard (src/setup.js) ----------
+const SETUP_API = {
+  'GET state': () => setup.setupState(),
+  'POST profile': (b) => setup.saveProfile(b),
+  'POST bot': (b) => setup.saveBot(b),
+  'POST model': (b) => setup.saveModel(b),
+  'POST model-test': (b) => setup.checkModel(b),
+  'POST claude-start': () => setup.claudeStart(),
+  'POST claude-code': (b) => setup.claudeCode(b),
+  'GET connect': () => connectState(),
+  'POST connect-done': () => setup.connectDone(),
+  'POST claude-token': (b) => setup.claudeTokenPaste(b),
+  'POST mode': (b) => { modes.saveMode(b.mode); return setup.setupState(); },
+  'POST mail': (b) => saveMail(b),
+  'POST mail-preset': (b) => ({ preset: mailbox.presetFor(b.address) }),
+  'POST google-client': (b) => { google.saveGoogleClient(b); return connectState(); },
+  'POST google-start': (b) => google.googleStart(b),
+  'POST google-finish': async (b) => { await google.googleFinish(b); return connectState(); },
+  'POST finish': () => {
+    const out = setup.finish(() => process.kill(process.pid, 'SIGTERM'));
+    const bridge = modes.currentMode() === 'both' && config.publicUrl ? modes.bridgeCommands(config.publicUrl) : null;
+    return { ...out, bridge, dashboard: config.publicUrl ? `${config.publicUrl}/?token=${config.dashboardToken}` : null };
+  },
+};
+async function handleSetup(req, res, url) {
+  if (!setup.setupOpen()) {
+    if (url.pathname.startsWith('/api/')) return send(res, 404, { error: 'Настройка уже завершена' });
+    return send(res, 404, 'Настройка уже завершена. Пульт открывается по ссылке из бота.');
+  }
+  if (!url.pathname.startsWith('/api/')) return serveStatic(res, url.pathname);
+  if (!sameOrigin(req)) return send(res, 403, { error: 'Нет доступа' });
+  const body = req.method === 'POST' ? await readBody(req, 100_000) : {};
+  const name = url.pathname.slice('/api/setup/'.length);
+  if (req.method === 'POST' && name === 'login') {
+    const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+    const sid = setup.setupLogin(ip, body.code);
+    return send(res, 200, { ok: true }, { 'set-cookie': `mf_setup=${sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400${isLocal(req) ? '' : '; Secure'}` });
+  }
+  if (!setup.setupAuthorized(cookies(req).mf_setup)) return send(res, 401, { error: 'Сначала введи фразу' });
+  const h = SETUP_API[`${req.method} ${name}`];
+  if (!h) return send(res, 404, { error: 'Нет такого шага' });
+  return send(res, 200, (await h(body)) ?? { ok: true });
 }
 
 export function startWeb() {
@@ -433,6 +516,19 @@ export function startWeb() {
         res.writeHead(200, { 'content-type': file.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
         return fs.createReadStream(file).pipe(res);
       }
+      // Connecting a computer: the script with a one-time code, then the computer's key (src/modes.js).
+      const br = url.pathname.match(/^\/bridge\/([\w-]{20,40})\/(mac\.sh|windows\.ps1)$/);
+      if (br && req.method === 'GET') {
+        const script = modes.bridgeScript(br[1], br[2] === 'windows.ps1' ? 'windows' : 'mac', baseUrl(req));
+        if (!script) return send(res, 404, 'echo "Код устарел или уже использован. Возьми новую команду в пульте: Ещё → Система → Компьютер"');
+        return send(res, 200, script, { 'content-type': 'text/plain; charset=utf-8' });
+      }
+      if (url.pathname === '/bridge/register' && req.method === 'POST') {
+        return send(res, 200, modes.bridgeRegister(await readBody(req, 20_000)));
+      }
+      // First-run wizard: only while SETUP_CODE is set and the setup is not finished.
+      if (url.pathname === '/setup' || url.pathname.startsWith('/setup/') || url.pathname.startsWith('/api/setup/')) return await handleSetup(req, res, url);
+      if (url.pathname === '/' && setup.setupOpen() && !cookies(req).mf_token) return send(res, 302, '', { location: '/setup/' });
       if (!url.pathname.startsWith('/api/')) return serveStatic(res, url.pathname);
       const who = authorized(req);
       if (!who) return send(res, 401, { error: 'Нет доступа. Открой через бота или по ссылке с токеном.' });

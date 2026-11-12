@@ -98,6 +98,9 @@ const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
 export function saveMemory({ name, title, description, type = 'project', body, pending = false }) {
   if (!String(body || '').trim()) throw new Error('Пустая заметка');
   if (/(sk-[a-z0-9-]{10,}|ghp_[a-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY|password\s*[:=]\s*\S{6,})/i.test(body)) throw new Error('В заметке похоже на секрет: ключи и пароли в память не пишем');
+  // With MEMORY_AUTO (default on since 12.11.2026, the owner's choice) notes go straight to memory:
+  // no approval cards. The old version stays in the history, so a wrong fact can be undone.
+  if (pending && kvGet('memory_auto', true)) pending = false;
   const file = `${slug(name || title)}.md`;
   const dir = pending ? PENDING_DIR : MEMORY_DIR;
   const existed = fs.existsSync(path.join(MEMORY_DIR, file));

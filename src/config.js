@@ -40,6 +40,8 @@ export const config = {
   pairingCode: secret('pairing-code', 6),
 
   botToken: env('BOT_TOKEN'),
+  // Where the owner talks to the assistant: telegram (BOT_TOKEN) or max (MAX_TOKEN, src/max.js).
+  channel: env('CHANNEL', env('MAX_TOKEN') && !env('BOT_TOKEN') ? 'max' : 'telegram').toLowerCase(),
   ownerTgId: env('OWNER_TG_ID'),
   publicUrl: env('PUBLIC_URL'),
   tunnel: env('TUNNEL', 'cloudflared'),
