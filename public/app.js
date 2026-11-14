@@ -762,6 +762,7 @@ function chatBody() {
       else if (e.kind === 'text') steps.push({ kind: 'text', text: e.content });
       else if (e.kind === 'system') steps.push({ kind: 'sys', text: e.content });
       else if (e.kind === 'notify') steps.push({ kind: 'sys', text: `🔔 ${e.content}` });
+      else if (e.kind === 'bg_report') steps.push({ kind: 'sys', text: `🧩 Фоновая работа: ${String(e.content).slice(0, 600)}` });
       else if (e.kind === 'error') errors.push(e.content);
     }
     const took = r.finished_at && r.started_at ? (() => { const sec = Math.round((r.finished_at - r.started_at) / 1000); return sec < 60 ? `${sec} с` : `${Math.floor(sec / 60)} мин ${sec % 60} с`; })() : '';
@@ -1316,6 +1317,21 @@ function viewPeopleMessages() {
 }
 
 // ---------- model provider: Claude login or any Anthropic-compatible API (src/models.js) ----------
+// One dense line: today's runs, tokens and the API-price estimate (the subscription itself is flat).
+function usageLine(st) {
+  const u = st.usage;
+  if (!u || !u.runs) return '';
+  const k = u.tokens >= 1e6 ? `${(u.tokens / 1e6).toFixed(1).replace('.', ',')} млн` : `${Math.round(u.tokens / 1000)} тыс.`;
+  return `<div class="faint">Сегодня: ${plural(u.runs, 'задача', 'задачи', 'задач')}, ~${k} токенов, ~$${u.cost.toFixed(2)} по ценам API</div>`;
+}
+// Subscription limit or the breaker (payment, login), when there is one.
+function claudeLine(st) {
+  const c = st.claude || {};
+  if (c.limitUntil) return `<div class="faint">⏳ Лимит подписки: задачи продолжатся в ${new Date(c.limitUntil).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}</div>`;
+  if (c.breaker) return '<div class="faint">⚠️ Подписка Claude не отвечает (оплата или вход): фоновые задачи на паузе, проверяю сама</div>';
+  return '';
+}
+
 function modelBlock() {
   const m = S.state?.model;
   if (!m) return '';
@@ -1410,7 +1426,7 @@ function viewSystemHost() {
   const lamp = st.authError || bad.includes('Бот') ? 'bad' : bad.length || st.paused ? 'warn' : 'ok';
   const text = lamp === 'ok' ? 'Всё работает' : st.paused && !bad.length ? 'Автоматика на паузе' : `Нужна проверка: ${bad.join(', ')}`;
   return `<div class="page-head"><div><h1>Система</h1></div></div>
-    <section class="card raised sys-lamp"><mf-spark size="44" state="${lamp === 'bad' ? 'error' : lamp === 'warn' ? 'waiting' : 'idle'}"></mf-spark><div class="grow"><b>${esc(text)}</b><div class="faint">${st.running.length ? `в работе ${st.running.length}` : 'сейчас тихо'} · ${st.paused ? 'автоматика на паузе' : 'автоматика включена'}</div></div></section>
+    <section class="card raised sys-lamp"><mf-spark size="44" state="${lamp === 'bad' ? 'error' : lamp === 'warn' ? 'waiting' : 'idle'}"></mf-spark><div class="grow"><b>${esc(text)}</b><div class="faint">${st.running.length ? `в работе ${st.running.length}` : 'сейчас тихо'} · ${st.paused ? 'автоматика на паузе' : 'автоматика включена'}</div>${usageLine(st)}${claudeLine(st)}</div></section>
     ${modelBlock()}
     ${connectBlock()}
     <details class="card raised fold"><summary class="sec-title">${icon('system')}Подключения и настройки</summary>${viewSystem()}</details>

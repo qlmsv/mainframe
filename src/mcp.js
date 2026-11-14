@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import { z } from 'zod';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { config } from './config.js';
-import { all, addLog } from './db.js';
+import { all, get, addLog } from './db.js';
+import { addWork, updateWork, STATUSES } from './worklog.js';
 import { saveMemory, deleteMemory, listMemory } from './memory.js';
 import { recallHybrid, recallOpen, formatRecall } from './recall.js';
 import { MAC_SERVERS } from './routing.js';
@@ -14,6 +15,7 @@ import { googleMcp } from './google.js';
 
 const handlers = {
   notify: async () => { throw new Error('Бот не настроен'); },
+  startRun: () => { throw new Error('Мейнфрейм не запущен'); },
   createTask: async () => { throw new Error('Планировщик не запущен'); },
 };
 export const setMainframeHandlers = (h) => Object.assign(handlers, h);
@@ -166,6 +168,37 @@ function mainframeServer(runId = null) {
         async ({ ref }) => { const d = recallOpen(ref); return text(`${d.title} (${new Date(d.at || 0).toLocaleString('ru')})\n\n${d.body.slice(0, 30000)}`); }),
       tool('list_projects', 'Список проектов мейнфрейма с их папками.', {},
         async () => text(JSON.stringify(all('SELECT id, name, cwd, description FROM projects'), null, 1))),
+      tool('start_run', 'Передать задачу другому проекту мейнфрейма (его сессия, папка и коннекторы, например Metricool в проекте соцсетей). Возвращает номер задачи; итог через run_status. quiet: true (по умолчанию) итог не приходит владельцу в чат, ты сам перескажешь его; false: проект пришлёт итог владельцу сам.',
+        { project_id: z.number().int().describe('id проекта из list_projects'), prompt: z.string().describe('задача целиком: проект не видит этот разговор'), quiet: z.boolean().optional() },
+        async ({ project_id, prompt, quiet = true }) => {
+          // Chains of runs starting runs stop at depth 2; the owner's chat stays the root.
+          let depth = 0; let cur = runId ? get('SELECT parent_run_id FROM runs WHERE id = ?', runId) : null;
+          while (cur?.parent_run_id && depth < 5) { depth++; cur = get('SELECT parent_run_id FROM runs WHERE id = ?', cur.parent_run_id); }
+          if (depth >= 2) return { ...text('Слишком длинная цепочка задач: сделай это сам или верни владельцу.'), isError: true };
+          if (runId && get('SELECT COUNT(*) c FROM runs WHERE parent_run_id = ?', runId).c >= 5) return { ...text('Из одной задачи можно запустить не больше 5 других.'), isError: true };
+          const id = handlers.startRun({ projectId: project_id, prompt: String(prompt).trim(), origin: quiet ? 'ui' : 'system', parentRunId: runId });
+          return text(`Задача №${id} поставлена в проект ${get('SELECT name FROM projects WHERE id = ?', project_id)?.name || project_id}. Итог: run_status {run_id: ${id}}.`);
+        }),
+      tool('run_status', 'Состояние задачи мейнфрейма по номеру: queued, running, done, error, stopped, deferred (ждёт сброса лимита) и короткий итог. wait_sec: подождать окончания до этого числа секунд (до 600).',
+        { run_id: z.number().int(), wait_sec: z.number().int().min(0).max(600).optional() },
+        async ({ run_id, wait_sec = 0 }) => {
+          const end = Date.now() + wait_sec * 1000;
+          let r = get('SELECT r.id, r.status, r.result, r.started_at, r.finished_at, p.name project FROM runs r LEFT JOIN projects p ON p.id = r.project_id WHERE r.id = ?', run_id);
+          if (!r) return { ...text('Нет такой задачи'), isError: true };
+          while (['queued', 'running'].includes(r.status) && Date.now() < end) {
+            await new Promise((res) => setTimeout(res, 3000));
+            r = get('SELECT r.id, r.status, r.result, r.started_at, r.finished_at, p.name project FROM runs r LEFT JOIN projects p ON p.id = r.project_id WHERE r.id = ?', run_id);
+          }
+          const last = ['queued', 'running'].includes(r.status) ? get("SELECT content FROM run_events WHERE run_id = ? AND kind IN ('text','tool') ORDER BY id DESC LIMIT 1", run_id)?.content : null;
+          const body = String(r.result || '').replace(/\n?\[\[(?:тихо|quiet)\]\]/gi, '');
+          return text(JSON.stringify({ run_id: r.id, project: r.project, status: r.status, result: body.length > 3000 ? `${body.slice(0, 3000)}…` : body, now_doing: last ? String(last).slice(0, 300) : undefined, minutes: r.started_at ? Math.round(((r.finished_at || Date.now()) - r.started_at) / 60000) : null }, null, 1));
+        }),
+      tool('work_log_add', 'Записать в реестр «что сделано» результат работы: коммит, ветка, выкладка, пост, документ, настройка. Коротко. То же название в течение 14 дней обновляет запись (например, статус «на проверке» → «выложено»).',
+        { project: z.string().describe('короткое имя проекта или продукта'), title: z.string().describe('короткое название задачи, с номером карточки, если есть (#38)'), location: z.string().optional().describe('где лежит: ветка, коммит, путь, ссылка'), status: z.enum(STATUSES).optional().describe('сделано, на проверке, выложено, ждёт') },
+        async (a) => { const r = addWork({ ...a, run_id: runId, source: 'session' }); return text(`${r.updated ? 'Обновлено' : 'Записано'}: №${r.id}`); }),
+      tool('work_log_update', 'Изменить запись реестра «что сделано» по номеру (из блока <mainframe-worklog>, [#N]).',
+        { id: z.number().int(), status: z.enum(STATUSES).optional(), location: z.string().optional(), title: z.string().optional() },
+        async ({ id, ...p }) => { const r = updateWork(id, p); return text(`№${r.id}: ${r.title} · ${r.status}`); }),
       ...moduleTools({ tool, z, text }),
     ],
   });
@@ -174,8 +207,9 @@ function mainframeServer(runId = null) {
 // mac=false leaves out the Mac, app and browser servers (apple, computer, chrome, jev, cua):
 // they stay in mcp.json, they are just not started for a session that doesn't need them.
 // mac: the work is about the computer, browser, mail or calendar (src/routing.js chooseTools).
-export function buildMcpServers({ mac = true, connectors = false, runId = null } = {}) {
-  const skip = mac ? [] : MAC_SERVERS;
+// skip: more servers to leave out (bridges known to be down, see src/bridges.js).
+export function buildMcpServers({ mac = true, connectors = false, runId = null, skip: extra = [] } = {}) {
+  const skip = [...(mac ? [] : MAC_SERVERS), ...extra];
   const servers = { ...Object.fromEntries(Object.entries(readMcpConfig()).filter(([n]) => !skip.includes(n))), mainframe: mainframeServer(runId) };
   if (config.tg.enabled) servers.telegram = { type: 'http', url: config.tg.url };
   if (mac) {

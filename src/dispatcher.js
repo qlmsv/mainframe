@@ -7,6 +7,7 @@ import { structured, startRun, isPaused, onRunFinished } from './agent.js';
 import { fetchBurst, tgSend, tgCall } from './telegram-mcp.js';
 import { mailReply } from './mail.js';
 import { parseMailExpense, addExpense } from './finance.js';
+import { sendOnce, registerSender } from './outbox.js';
 
 const notifiers = new Set();
 export const onInboxUpdate = (fn) => notifiers.add(fn);
@@ -315,7 +316,9 @@ export async function forwardItem(id, { projectId, text, task } = {}) {
   return runId;
 }
 
-export async function replyItem(id, { text } = {}) {
+// once: the same text to the same chat goes once a day (src/outbox.js); a queued send (undo window)
+// already holds that guard, so its executor passes once: false.
+export async function replyItem(id, { text, once = true } = {}) {
   const item = getItem(id);
   if (!item) throw new Error('Нет такого сообщения');
   const body = (text ?? item.draft ?? '').trim();
@@ -328,11 +331,16 @@ export async function replyItem(id, { text } = {}) {
   const claimed = run("UPDATE inbox SET status = 'sending' WHERE id = ? AND status NOT IN ('sending', 'replied')", id).changes;
   if (!claimed && text === undefined) throw new Error('Ответ уже отправлен');
   if (!claimed) run("UPDATE inbox SET status = 'sending' WHERE id = ?", id);
-  try {
+  const deliver = async () => {
     if (item.source === 'mail') await mailReply(JSON.parse(item.meta || '{}'), body);
     // In a group the answer goes as a reply to the last message of the card, not into the void.
     else if (item.source === 'group' && item.last_message_id) await tgCall('reply_to_message', { chat_id: Number(item.chat_id), message_id: Number(item.last_message_id), text: body });
     else await tgSend(item.chat_id, body);
+    return { ok: true };
+  };
+  try {
+    if (once) await sendOnce({ kind: 'inbox_reply', channel: item.source, target: item.chat_id, text: body }, deliver);
+    else await deliver();
   } catch (e) {
     run('UPDATE inbox SET status = ? WHERE id = ?', item.status === 'sending' ? 'routed' : item.status, id);
     throw e;
@@ -341,11 +349,15 @@ export async function replyItem(id, { text } = {}) {
   return update(id, { status: 'replied', draft: body });
 }
 
+registerSender('inbox_reply', ({ id, text }) => replyItem(Number(id), { text, once: false }).then((x) => ({ ok: true, name: x?.name })));
+
 export const ignoreItem = (id) => update(Number(id), { status: 'ignored' });
 
 // After a forwarded task finishes, prepare a short follow-up for the sender.
 onRunFinished(async (r) => {
   if (!r.inbox_id) return;
+  // Waiting for the subscription limit to reset: the continuation reports back, not this run.
+  if (r.status === 'deferred') return;
   const item = getItem(r.inbox_id);
   if (!item) return;
   if (r.status !== 'done') {

@@ -203,7 +203,8 @@ async function onCallback(u) {
   if (data.startsWith('ask:')) return runTask(userId, data.slice(4));
   if (data.startsWith('ms:')) {
     const [, id, ok] = data.split(':');
-    const { sent, m } = await decideSend(id, ok === '1');
+    const { sent, queued, m } = await decideSend(id, ok === '1');
+    if (queued) return maxSend(userId, queued.repeated ? `📤 Это письмо уже отправлено или в очереди: ${m.to}` : `📤 Отправлю через ${Math.round((queued.dueAt - Date.now()) / 1000)} с: ${m.to}, «${m.subject}». Отменить можно в пульте или Telegram.`);
     return maxSend(userId, sent ? `📤 Отправлено: ${m.to}, «${m.subject}»` : '🗑 Письмо отменено');
   }
   return null;

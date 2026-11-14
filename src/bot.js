@@ -15,6 +15,7 @@ import { saveUpload, withAttachments } from './uploads.js';
 import { completeReminder } from './apple.js';
 import { refreshReport } from './social.js';
 import { contentCallback, todayPosts } from './content.js';
+import { queueSend, cancelSend, attachMessage, onSendDone, getSend } from './outbox.js';
 import { modelState, saveModelSettings } from './models.js';
 import { listMemory, listPending, approvePending, rejectPending, markAnnounced, announced } from './memory.js';
 import {
@@ -278,17 +279,18 @@ function announcePending() {
 }
 
 function resultMessage(r, project) {
-  const icon = r.status === 'done' ? '✅' : r.status === 'stopped' ? '⏹' : '⚠️';
+  const icon = r.status === 'done' ? '✅' : r.status === 'stopped' ? '⏹' : r.status === 'deferred' ? '⏳' : '⚠️';
+  const fine = r.status === 'done' || r.status === 'deferred';
   const took = r.finished_at && r.started_at ? ` · ${dur(r.finished_at - r.started_at)}` : '';
   const task = /^\[Задача по расписанию «(.+?)»\]/.exec(r.prompt || '')?.[1];
   // The session the owner talks to needs no title: just the answer. Other projects and scheduled
   // tasks keep a short label so it is clear where the message came from.
   const own = currentProject().id === project.id && !task;
-  const head = own ? (r.status === 'done' ? '' : `${icon} <b>${r.status === 'stopped' ? 'Остановлено' : 'Ошибка'}</b>`) : `${icon} <b>${esc(project.name)}</b>${task ? ` · ⏰ ${esc(task)}` : ''}${took}`;
+  const head = own ? (fine ? '' : `${icon} <b>${r.status === 'stopped' ? 'Остановлено' : 'Ошибка'}</b>`) : `${icon} <b>${esc(project.name)}</b>${task ? ` · ⏰ ${esc(task)}` : ''}${took}`;
   const { text: raw, choices, copies } = extractButtons(String(r.result || (r.status === 'stopped' ? 'Остановлено' : r.status)));
   const text = `${head ? `${head}\n\n` : ''}${answer(raw)}`;
   // The same answer as Telegram rich Markdown (tables, headings, lists rendered by Telegram itself).
-  const mdHead = own ? (r.status === 'done' ? '' : `${icon} **${r.status === 'stopped' ? 'Остановлено' : 'Ошибка'}**`) : `${icon} **${project.name}**${task ? ` · ⏰ ${task}` : ''}${took}`;
+  const mdHead = own ? (fine ? '' : `${icon} **${r.status === 'stopped' ? 'Остановлено' : 'Ошибка'}**`) : `${icon} **${project.name}**${task ? ` · ⏰ ${task}` : ''}${took}`;
   const md = `${mdHead ? `${mdHead}\n\n` : ''}${raw}`.slice(0, 32000);
   const kb = new InlineKeyboard();
   // Answer buttons the session asked for: a tap sends that text back to the same session.
@@ -347,6 +349,27 @@ export const ONBOARDING_PROMPT = `Это первое знакомство с в
 8. Есть ли Telegram-канал и соцсети, сайт, бот продаж. (type reference)
 В конце коротко перечисли, что запомнил, и подскажи 3 первые команды: «запомни, что…», задача голосом, /memory.
 Начни с короткого приветствия в одну строку и первого вопроса.`;
+
+// The undo window of a send (src/outbox.js): one message with «Отменить», edited when it went.
+async function undoMessage(ctx, q, what) {
+  if (q.repeated) {
+    await ctx.reply(`📤 Это уже ${q.status === 'sent' ? 'отправлено' : 'в очереди на отправку'} (${esc(what)}), второй раз не отправляю.`, HTML);
+    return 'Уже отправлено';
+  }
+  const sec = Math.max(1, Math.round((q.dueAt - Date.now()) / 1000));
+  const m = await ctx.reply(`⏳ Отправлю через ${sec} с: ${esc(what)}`, { ...HTML, reply_markup: new InlineKeyboard().text('↩️ Отменить', `ox:${q.id}`) });
+  attachMessage(q.id, ctx.chat.id, m.message_id);
+  undoLabels.set(q.id, what);
+  return `Отправлю через ${sec} с`;
+}
+const undoLabels = new Map(); // outbox id -> what it sends, for the edited message
+onSendDone(async (row) => {
+  if (!bot || !row.chat_id || !row.message_id) return;
+  const what = undoLabels.get(row.id) || row.target;
+  undoLabels.delete(row.id);
+  const text = row.status === 'sent' ? `📤 Отправлено: ${esc(what)}` : `⚠️ Не ушло (${esc(what)}): ${esc(String(row.error || '').slice(0, 200))}`;
+  await bot.api.editMessageText(Number(row.chat_id), Number(row.message_id), text, HTML).catch(() => {});
+});
 
 export function startBot() {
   if (config.channel === 'max') {
@@ -651,17 +674,32 @@ export function startBot() {
         await trackRun(runId, ctx.chat.id, ctx.callbackQuery.message?.message_id, p);
         toast = `Задача ушла в «${p.name}»`;
       } else if (kind === 'r') {
-        const item = await replyItem(Number(a));
-        toast = `Ответил ${item.name}`;
-        await edit(ctx, inboxCard(getItem(Number(a)), 'view'));
+        const it = getItem(Number(a));
+        const text = String(it?.draft || '').trim();
+        if (config.sendUndoSec > 0 && it && text && !['sending', 'replied'].includes(it.status)) {
+          const q = queueSend({ kind: 'inbox_reply', channel: it.source, target: it.chat_id, text, payload: { id: it.id, text } });
+          toast = await undoMessage(ctx, q, `ответ ${it.name}`);
+        } else {
+          const item = await replyItem(Number(a));
+          toast = `Ответил ${item.name}`;
+          await edit(ctx, inboxCard(getItem(Number(a)), 'view'));
+        }
       } else if (kind === 'i') {
         ignoreItem(Number(a));
         await edit(ctx, inboxCard(getItem(Number(a)), 'view'));
       } else if (kind === 'ms') {
-        const { sent, m } = await decideSend(a, b === '1');
-        toast = sent ? `Отправил: ${m.to}` : 'Письмо не отправлено';
+        const { sent, queued, m } = await decideSend(a, b === '1');
         await ctx.editMessageReplyMarkup().catch(() => {});
-        await ctx.reply(sent ? `📤 Отправлено: ${esc(m.to)}, «${esc(m.subject)}»` : '🗑 Письмо отменено', HTML);
+        if (queued) toast = await undoMessage(ctx, queued, `письмо ${m.to}, «${m.subject}»`);
+        else {
+          toast = sent ? `Отправил: ${m.to}` : 'Письмо не отправлено';
+          await ctx.reply(sent ? `📤 Отправлено: ${esc(m.to)}, «${esc(m.subject)}»` : '🗑 Письмо отменено', HTML);
+        }
+      } else if (kind === 'ox') {
+        const row = getSend(a);
+        toast = cancelSend(a) ? 'Отменено, не отправил' : row?.status === 'sent' ? 'Уже отправлено' : 'Уже не отменить';
+        const what = undoLabels.get(Number(a)) || row?.target || '';
+        await ctx.editMessageText(toast === 'Отменено, не отправил' ? `↩️ Отменено, не отправил: ${esc(what)}` : `${row?.status === 'sent' ? '📤 Уже отправлено' : '⚠️ Уже не отменить'}: ${esc(what)}`, HTML).catch(() => {});
       } else if (kind === 'x') {
         stopRun(Number(a));
         toast = 'Остановлено';
@@ -703,6 +741,12 @@ export function startBot() {
         for (const n of items) (a === 'ok' ? approvePending : rejectPending)(n.name);
         toast = a === 'ok' ? `Запомнил: ${items.length}` : `Отклонил: ${items.length}`;
         await edit(ctx, memoryScreen());
+      } else if (kind === 'cpn' && config.sendUndoSec > 0) {
+        const post = get('SELECT id, network, text FROM content_posts WHERE id = ?', Number(a));
+        if (!post) throw new Error('Пост не найден');
+        toast = await undoMessage(ctx, queueSend({ kind: 'post', channel: `post-${post.network}`, target: post.network, text: post.text, payload: { id: post.id } }), `пост в ${post.network}`);
+        const rows = (ctx.callbackQuery.message?.reply_markup?.inline_keyboard || []).filter((r) => !r.some((x) => /^cp[xn]:/.test(x.callback_data || '') && x.callback_data.split(':')[1] === String(a)));
+        await ctx.editMessageReplyMarkup(rows.length ? { reply_markup: { inline_keyboard: rows } } : undefined).catch(() => {});
       } else if (kind === 'cpok' || kind === 'cpx' || kind === 'cpn' || kind === 'cpd') {
         toast = await contentCallback(kind, a);
         // In the morning message only the tapped post's row goes; other buttons stay.
@@ -763,7 +807,7 @@ export function startBot() {
     const held = BACKGROUND.has(r.origin) ? all("SELECT content FROM run_events WHERE run_id = ? AND kind = 'notify' ORDER BY id", r.id).map((x) => x.content) : [];
     // A run from the dashboard answers there; Telegram hears from it only if it meant to tell the owner.
     if (r.origin === 'ui' && !held.length) return;
-    if (r.origin !== 'bot' && r.status === 'done' && QUIET_RE.test(r.result || '')) {
+    if ((r.origin !== 'bot' || r.status === 'deferred') && ['done', 'deferred', 'stopped'].includes(r.status) && QUIET_RE.test(r.result || '')) {
       addLog('run', `[${project.name}] итог без новостей, в чат не отправляю`, r.id);
       return;
     }
@@ -774,7 +818,7 @@ export function startBot() {
       // Telegram allows only some emoji as reactions: an unsupported one falls back to 👍.
       if (await react(chat, t.userMsgId, ack[1].trim()) || await react(chat, t.userMsgId, '👍')) return;
     }
-    if (t) react(chat, t.userMsgId, r.status === 'done' ? '👍' : r.status === 'stopped' ? '🤷' : '😢');
+    if (t) react(chat, t.userMsgId, r.status === 'done' ? '👍' : r.status === 'stopped' ? '🤷' : r.status === 'deferred' ? '⏳' : '😢');
     // A scheduled task that says exactly the same as its last report within a day stays quiet.
     const task = r.origin === 'cron' && /^\[Задача по расписанию «(.+?)»\]/.exec(r.prompt || '')?.[1];
     if (task && r.status === 'done') {
@@ -806,6 +850,12 @@ export function startBot() {
     const long = r.finished_at - r.started_at > 60000;
     const msg = await sendAnswer(chat, md, text, { ...(kb.inline_keyboard.length ? { reply_markup: kb } : {}), ...(r.status === 'done' && long ? { message_effect_id: EFFECT_DONE } : {}) });
     remember(msg, { projectId: project.id });
+    // Reports of background work (agents, subtasks) that came after the answer: their own quiet message.
+    const reports = all("SELECT content FROM run_events WHERE run_id = ? AND kind = 'bg_report' ORDER BY id", r.id).map((x) => x.content);
+    if (reports.length) {
+      const one = reports.map((x) => extractButtons(String(x)).text).filter(Boolean).join('\n\n---\n\n').slice(0, 30000);
+      if (one) await sendAnswer(chat, `🧩 **Фоновая работа** · ${project.name}\n\n${one}`, `🧩 <b>Фоновая работа</b> · ${esc(project.name)}\n\n${answer(one)}`, { disable_notification: true }).catch((e) => addLog('error', `Бот: отчёт фоновой работы: ${e.message.slice(0, 120)}`));
+    }
     if (digest === 'evening') await sendPendingCard().catch((e) => addLog('error', `Память, карточка: ${e.message.slice(0, 120)}`));
   });
 

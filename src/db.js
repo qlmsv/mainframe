@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { DATA_DIR, config } from './config.js';
+import { DATA_DIR, config, SECRET_LITERALS } from './config.js';
 import { bus } from './bus.js';
 
 export const db = new DatabaseSync(path.join(DATA_DIR, 'mainframe.db'));
@@ -93,6 +93,75 @@ CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 // Columns added after the first release.
 const runCols = db.prepare('PRAGMA table_info(runs)').all().map((c) => c.name);
 if (!runCols.includes('model')) db.exec('ALTER TABLE runs ADD COLUMN model TEXT');
+// Spend per run: cost is this run's own share (the SDK reports the running total of the whole
+// conversation, kept in cost_total), tokens the same way (usage_total holds the running totals).
+for (const [c, t] of [['cost_total', 'REAL'], ['tokens_in', 'INTEGER'], ['tokens_out', 'INTEGER'], ['tokens_cache_read', 'INTEGER'], ['tokens_cache_write', 'INTEGER'], ['usage_total', 'TEXT'], ['ctx_tokens', 'INTEGER'], ['parent_run_id', 'INTEGER']]) {
+  if (!runCols.includes(c)) db.exec(`ALTER TABLE runs ADD COLUMN ${c} ${t}`);
+}
+db.exec(`
+CREATE TABLE IF NOT EXISTS deferred_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER,
+  project_id INTEGER,
+  origin TEXT,
+  inbox_id INTEGER,
+  prompt TEXT,
+  reason TEXT,
+  due_at INTEGER NOT NULL,
+  status TEXT DEFAULT 'waiting',
+  new_run_id INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS work_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL,
+  project TEXT,
+  title TEXT NOT NULL,
+  location TEXT,
+  status TEXT DEFAULT 'сделано',
+  run_id INTEGER,
+  source TEXT,
+  updated_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT,
+  kind TEXT NOT NULL,
+  channel TEXT,
+  target TEXT,
+  payload TEXT,
+  status TEXT DEFAULT 'pending',
+  due_at INTEGER,
+  result TEXT,
+  error TEXT,
+  chat_id TEXT,
+  message_id INTEGER,
+  created_at INTEGER NOT NULL,
+  done_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_key ON outbox(key);
+CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at);
+`);
+// Before 14.11.2026 cost held the conversation's running total: turn it into each run's own share once.
+if (!runCols.includes('cost_total')) {
+  db.exec('UPDATE runs SET cost_total = cost WHERE cost IS NOT NULL');
+  const rows = db.prepare('SELECT id, project_id, session_id, cost_total FROM runs WHERE cost_total IS NOT NULL ORDER BY id').all();
+  const lastBySession = new Map();
+  const lastByProject = new Map(); // the project's main conversation, for runs in a copy of it
+  const forkIds = new Set(db.prepare("SELECT DISTINCT run_id FROM run_events WHERE kind = 'system' AND content LIKE 'Сессия занята%'").all().map((x) => x.run_id));
+  const upd = db.prepare('UPDATE runs SET cost = ? WHERE id = ?');
+  for (const r of rows) {
+    let base = lastBySession.get(r.session_id);
+    // A copy starts from the main conversation's total at the moment it was copied: the largest
+    // earlier total of that project not above its own.
+    if (base == null && forkIds.has(r.id)) base = Math.max(-1, ...(lastByProject.get(r.project_id) || []).filter((x) => x <= r.cost_total));
+    if (base === -1) base = null;
+    const own = base != null && r.cost_total >= base ? r.cost_total - base : r.cost_total;
+    upd.run(Math.round(own * 10000) / 10000, r.id);
+    lastBySession.set(r.session_id, r.cost_total);
+    if (!forkIds.has(r.id)) lastByProject.set(r.project_id, [...(lastByProject.get(r.project_id) || []).slice(-50), r.cost_total]);
+  }
+}
 const inboxCols = db.prepare('PRAGMA table_info(inbox)').all().map((c) => c.name);
 if (!inboxCols.includes('external_id')) db.exec('ALTER TABLE inbox ADD COLUMN external_id TEXT');
 if (!inboxCols.includes('meta')) db.exec('ALTER TABLE inbox ADD COLUMN meta TEXT');
@@ -104,7 +173,10 @@ export const now = () => Date.now();
 // copied into the history, so they are masked on the way in (first characters stay for recognition).
 const SECRET_RE = /(sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|\bAKIA[A-Z0-9]{16}\b|xox[abpr]-[0-9A-Za-z-]{20,}|\b\d{8,10}:AA[A-Za-z0-9_-]{30,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)/g;
 const SECRET_KV_RE = /\b([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|API_KEY|PASSWORD|PASS)[A-Z0-9_]*\s*[=:]\s*)(["']?)([^\s"']{12,})/g;
-export const redact = (s) => (s == null ? s : String(s).replace(SECRET_RE, (m) => `${m.slice(0, 6)}…[скрыто]`).replace(SECRET_KV_RE, (_, k, q) => `${k}${q}[скрыто]`));
+// Exact values from .env (secret variables and stray key pieces), longest first.
+const LITERALS = [...SECRET_LITERALS].sort((a, b) => b.length - a.length);
+const maskLiterals = (s) => { for (const v of LITERALS) if (s.includes(v)) s = s.split(v).join(`${v.slice(0, 4)}…[скрыто]`); return s; };
+export const redact = (s) => (s == null ? s : maskLiterals(String(s)).replace(SECRET_RE, (m) => `${m.slice(0, 6)}…[скрыто]`).replace(SECRET_KV_RE, (_, k, q) => `${k}${q}[скрыто]`));
 
 export const all = (sql, ...args) => db.prepare(sql).all(...args);
 export const get = (sql, ...args) => db.prepare(sql).get(...args);

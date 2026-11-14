@@ -16,6 +16,8 @@ const SITE_FAILS = 3; // a site counts as down after this many failed checks in 
 const KINDS = [
   { key: 'bot', title: 'Бот не отправил сообщение', re: /^(Уведомление|onRunFinished|Бот|Память, карточка|Карточка дня):.*(send|failed|Forbidden|blocked)|^Бот не запустился/i },
   { key: 'pay', title: 'Сбой оплаты', re: /^(Оплата|Платёж|Payment)[^:]*:/i }, // modules log payment failures with this prefix
+  // src/limits.js: the Claude subscription refuses (payment past due, login): at most every 3 hours.
+  { key: 'claude', title: 'Подписка Claude не работает: оплата или вход', re: /^Claude недоступен:/, throttle: 3 * 3600000, plain: true },
 ];
 
 // Same error, different ids and numbers: one group.
@@ -45,7 +47,7 @@ export function startAlerts(send) {
 
   async function tick() {
     const sent = kvGet('alerts_sent', {});
-    const due = (key) => Date.now() - (sent[key] || 0) > THROTTLE_MS;
+    const due = (key, ms = THROTTLE_MS) => Date.now() - (sent[key] || 0) > ms;
     const lastLog = kvGet('alerts_last_log', 0);
     const rows = all("SELECT id, message FROM log WHERE id > ? AND kind = 'error' ORDER BY id", lastLog);
     const maxLog = get('SELECT MAX(id) m FROM log')?.m || lastLog;
@@ -56,7 +58,12 @@ export function startAlerts(send) {
     }
     for (const k of KINDS) {
       const list = byKind.get(k.key);
-      if (!list?.length || !due(k.key)) continue;
+      if (!list?.length || !due(k.key, k.throttle)) continue;
+      if (k.plain) {
+        notify(`⚠️ <b>${k.title}.</b> Проверь claude.ai/settings/billing и вход. Фоновые задачи после второй такой ошибки встают на паузу и продолжатся сами, когда Claude заработает.`);
+        sent[k.key] = Date.now();
+        continue;
+      }
       const g = group(list);
       const more = g.length > 1 ? ` (+ ещё ${g.length - 1} вида)` : '';
       notify(`⚠️ <b>${k.title}</b>${list.length > 1 ? ` ×${list.length}` : ''}: ${esc(clip(g[0].sample, 160))}${more}`);

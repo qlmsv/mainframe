@@ -1,5 +1,5 @@
 import { config } from './config.js';
-import { addLog, all, run, recoverInterrupted, kvGet } from './db.js';
+import { addLog, all, get, run, recoverInterrupted, kvGet } from './db.js';
 const interrupted = recoverInterrupted();
 import { startWeb, route } from './web.js';
 import { loadModules, registerRoutes, startModules } from './modules.js';
@@ -18,7 +18,11 @@ import { startMemoryExtract } from './memory-extract.js';
 import { addExpense, listExpenses, financeSummary, rescanInbox, setBalance } from './finance.js';
 import { reloadTasks, createTask } from './scheduler.js';
 import { setMainframeHandlers } from './mcp.js';
-import { activeRuns, onRunFinished, startRun } from './agent.js';
+import { activeRuns, onRunFinished, startRun, startDeferred, structured, isMacProject } from './agent.js';
+import { startBreakerProbe, onClaudeRecovered } from './limits.js';
+import { logFromRun } from './worklog.js';
+import { resumeOutbox } from './outbox.js';
+import { ensureMemorySleepTask } from './scheduler.js';
 import { startTunnel, stopTunnel } from './tunnel.js';
 
 // Self-restart for code changes: wait until no session is running, then exit;
@@ -33,7 +37,7 @@ const restartIfIdle = () => {
   }, 5000);
 };
 onRunFinished(() => restartIfIdle());
-setMainframeHandlers({ createTask: (args) => createTask(args), saveSocial: (r) => saveReport(r), addExpense: (e) => addExpense(e), linkedinPost: (a) => linkedin.post(a), linkedinStatus: () => linkedin.status(), contentSaveDrafts: (a) => content.saveDrafts(a), contentMark: (a) => content.markPost(a), contentAddCompetitor: (u) => content.addCompetitor(u), contentAddIdea: (i) => content.addIdea(i), setBalance: (b) => setBalance(b), financeSummaryFor: (days) => ({ items: listExpenses({ from: Date.now() - days * 86400000 }), summary: { today: financeSummary().today, month: financeSummary().month, categories: financeSummary().categories } }), requestRestart: () => { restartRequested = true; addLog('system', 'Запрошен перезапуск мейнфрейма'); restartIfIdle(); } });
+setMainframeHandlers({ startRun: (a) => startRun(a), createTask: (args) => createTask(args), saveSocial: (r) => saveReport(r), addExpense: (e) => addExpense(e), linkedinPost: (a) => linkedin.post(a), linkedinStatus: () => linkedin.status(), contentSaveDrafts: (a) => content.saveDrafts(a), contentMark: (a) => content.markPost(a), contentAddCompetitor: (u) => content.addCompetitor(u), contentAddIdea: (i) => content.addIdea(i), setBalance: (b) => setBalance(b), financeSummaryFor: (days) => ({ items: listExpenses({ from: Date.now() - days * 86400000 }), summary: { today: financeSummary().today, month: financeSummary().month, categories: financeSummary().categories } }), requestRestart: () => { restartRequested = true; addLog('system', 'Запрошен перезапуск мейнфрейма'); restartIfIdle(); } });
 
 // Optional modules (modules/ and your own personal/): loaded before the web routes and the bot.
 await loadModules();
@@ -47,8 +51,26 @@ try {
 }
 registerRoutes(route);
 ensureSocialTask();
+try { ensureMemorySleepTask(); } catch (e) { addLog('error', `Ночная уборка памяти: ${e.message}`); }
 reloadTasks();
 startBot();
+// Sends waiting in their undo window before the restart go on (src/outbox.js).
+resumeOutbox();
+// Runs waiting for the subscription limit to reset or for Claude to answer again (src/limits.js).
+startDeferred();
+startBreakerProbe();
+onClaudeRecovered(() => {
+  import('./bot.js').then(({ sendOwner }) => sendOwner('✅ Подписка Claude снова работает: фоновые задачи продолжаются.').catch(() => {}));
+  // Messages that could not be sorted while Claude was down.
+  for (const { id } of all("SELECT id FROM inbox WHERE status = 'new' AND created_at > ?", Date.now() - 86400000)) classify(id).catch(() => {});
+});
+// The register of finished work: a cheap summary of runs that clearly produced something (src/worklog.js).
+onRunFinished((r, project) => { logFromRun(r, project, structured).catch((e) => addLog('error', `Реестр работ: ${e.message.slice(0, 160)}`)); });
+// The computer's bridges: checked every minute, restarted when down, one message after a long outage.
+import('./bridges.js').then(({ watchBridges }) => import('./bot.js').then(({ sendOwner }) => watchBridges({
+  notify: (t) => sendOwner(t, { disable_notification: false }).catch(() => {}),
+  busyMac: () => activeRuns().some((id) => { const x = get('SELECT p.cwd FROM runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?', id); return x && isMacProject(x.cwd); }),
+})));
 startTunnel(() => updateMenuButton());
 import('./modes.js').then(({ watchBridge }) => watchBridge());
 import('./macwatch.js').then(({ watchMacTunnel }) => { if (process.env.MAC_RUNNER) watchMacTunnel(); });

@@ -20,6 +20,16 @@ function setState(patch) {
   bus.change('telegram');
 }
 
+// Keep the server's log small: over LOG_MAX_MB (default 10) the current text moves to .1 (one old copy).
+let rotateTimer = null;
+function rotateLog(file, maxBytes = (Number(process.env.LOG_MAX_MB) || 10) * 1048576) {
+  try {
+    if (!fs.existsSync(file) || fs.statSync(file).size < maxBytes) return;
+    fs.copyFileSync(file, `${file}.1`);
+    fs.truncateSync(file, 0);
+  } catch { /* a log problem must not stop Telegram */ }
+}
+
 export function startTelegramMcp() {
   if (!config.tg.enabled) {
     setState({ process: 'not_configured' });
@@ -33,7 +43,11 @@ export function startTelegramMcp() {
     setState({ process: 'missing', error: `Нет ${config.tg.dir}. Запусти scripts/setup.sh` });
     return;
   }
-  const logFile = fs.createWriteStream(path.join(DATA_DIR, 'logs', 'telegram-mcp.log'), { flags: 'a' });
+  const logPath = path.join(DATA_DIR, 'logs', 'telegram-mcp.log');
+  rotateLog(logPath);
+  // The file is opened for appending, so cutting it in place is safe while the server writes.
+  if (!rotateTimer) { rotateTimer = setInterval(() => rotateLog(logPath), 3600000); rotateTimer.unref(); }
+  const logFile = fs.createWriteStream(logPath, { flags: 'a' });
   child = spawn('uv', ['run', '--directory', config.tg.dir, 'main.py'], {
     env: {
       ...process.env,

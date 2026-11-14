@@ -13,6 +13,8 @@ import { simpleParser } from 'mailparser';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { ROOT } from './config.js';
 import { kvGet, kvSet, addLog } from './db.js';
+import { config } from './config.js';
+import { sendOnce, queueSend, registerSender } from './outbox.js';
 
 // Common providers: the address is enough, the servers come from its domain.
 const PRESETS = [
@@ -214,6 +216,12 @@ export async function requestSend(m) {
   return id;
 }
 
+// The same letter (recipient, subject, text) goes once a day: a double tap returns the first result.
+const mailKey = (m) => ({ kind: 'mail', channel: 'mail', target: m.to, text: `${m.subject}\n${m.body}` });
+registerSender('mail', (m) => deliver(m));
+
+// The owner's «Отправить»: with SEND_UNDO_SEC the letter waits that long with an «Отменить» button
+// (returns { queued }); without it, it goes at once.
 export async function decideSend(id, ok) {
   const box = outbox();
   const m = box[id];
@@ -221,7 +229,8 @@ export async function decideSend(id, ok) {
   delete box[id];
   kvSet('mail_outbox', box);
   if (!ok) return { sent: false, m };
-  await deliver(m);
+  if (config.sendUndoSec > 0) return { sent: false, queued: queueSend({ ...mailKey(m), payload: m }), m };
+  await sendOnce(mailKey(m), () => deliver(m));
   return { sent: true, m };
 }
 

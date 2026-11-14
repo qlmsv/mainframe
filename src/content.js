@@ -7,6 +7,10 @@ import { all, get, run, now, kvGet, kvSet, addLog } from './db.js';
 import { bus } from './bus.js';
 import { tgCall } from './telegram-mcp.js';
 import { structured, startRun } from './agent.js';
+import { sendOnce, registerSender } from './outbox.js';
+import { breakerOpen, limitUntil } from './limits.js';
+
+const claudeDown = () => breakerOpen() || Boolean(limitUntil());
 import * as linkedin from './linkedin.js';
 import { ensureSocialTask, channelStats } from './social.js';
 import { watchedGroups } from './groups.js';
@@ -179,7 +183,9 @@ export async function publishNow(id) {
   try {
     let url = null; let ext = null;
     if (p.network === 'telegram') {
-      await tgCall('send_message', { chat_id: config.social.channel, message: p.text });
+      // The same text to the channel goes once a day, whatever taps or retries happen.
+      const prev = await sendOnce({ kind: 'post', channel: 'telegram-channel', target: config.social.channel, text: p.text }, () => tgCall('send_message', { chat_id: config.social.channel, message: p.text }).then(() => ({ ok: true })));
+      if (prev?.repeated) addLog('system', `Пост #${id}: этот текст уже ушёл в канал за сутки, второй раз не отправляю`);
       const last = await tgCall('list_messages', { chat_id: config.social.channel, limit: 1 }).catch(() => null);
       ext = last?.results?.[0]?.id ?? null;
       url = ext ? `https://t.me/${config.social.channel}/${ext}` : `https://t.me/${config.social.channel}`;
@@ -197,6 +203,9 @@ export async function publishNow(id) {
     throw e;
   }
 }
+
+// «🚀 Сейчас» from the bot goes through the undo window (src/outbox.js).
+registerSender('post', ({ id }) => publishNow(Number(id)));
 
 export function schedule(id, at) {
   const p = get('SELECT * FROM content_posts WHERE id = ?', id);
@@ -513,9 +522,13 @@ export function startContent() {
     }
     if ([11, 17].includes(d.getHours()) && kvGet('content_auto_slot', '') !== `${day()}-${d.getHours()}`) {
       kvSet('content_auto_slot', `${day()}-${d.getHours()}`);
-      autoFromRivals(d.getHours() === 11 ? 2 : 6).catch((e) => addLog('error', `Автопосты: ${e.message}`));
+      if (!claudeDown()) autoFromRivals(d.getHours() === 11 ? 2 : 6).catch((e) => addLog('error', `Автопосты: ${e.message}`));
     }
-    if (d.getHours() === 7 && kvGet('ideas_day', '') !== day() && !ideasBusy) refreshIdeas().catch((e) => addLog('error', `Банк идей: ${e.message}`));
+    // One try per 30 minutes, and none while the subscription is down: a failing call must not repeat every minute.
+    if (d.getHours() === 7 && kvGet('ideas_day', '') !== day() && !ideasBusy && !claudeDown() && Date.now() - kvGet('ideas_try', 0) > 30 * 60000) {
+      kvSet('ideas_try', Date.now());
+      refreshIdeas().catch((e) => addLog('error', `Банк идей: ${e.message}`));
+    }
   };
   setTimeout(tick, 20000);
   setInterval(tick, 60000).unref();

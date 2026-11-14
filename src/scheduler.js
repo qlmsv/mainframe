@@ -2,6 +2,10 @@ import { Cron } from 'croner';
 import { all, get, run, now, addLog, defaultProject } from './db.js';
 import { bus } from './bus.js';
 import { startRun, isPaused, onRunFinished } from './agent.js';
+import { config } from './config.js';
+import { kvGet, kvSet } from './db.js';
+import { breakerOpen } from './limits.js';
+import { backupMemory, MEMORY_DIR } from './memory.js';
 
 const jobs = new Map();
 
@@ -24,6 +28,18 @@ export function fireTask(id, manual = false) {
   if (!manual && isPaused()) {
     addLog('cron', `Пропуск «${t.name}»: автоматика на паузе`);
     return null;
+  }
+  // The subscription is down (payment, login): scheduled work waits for the next time instead of failing.
+  if (!manual && breakerOpen()) {
+    addLog('cron', `Пропуск «${t.name}»: подписка Claude не работает, фоновые задачи на паузе`);
+    return null;
+  }
+  // The nightly memory cleanup changes notes: a copy of the folder first, or no cleanup.
+  if (Number(kvGet('memory_sleep_task', 0)) === t.id) {
+    try { backupMemory(); } catch (e) {
+      addLog('error', `Память: резервная копия не сделана, уборка пропущена: ${e.message.slice(0, 160)}`);
+      return null;
+    }
   }
   // The previous run of this task is still going: don't pile up a queue of copies.
   const busy = all("SELECT key FROM kv WHERE key LIKE 'task_run_%' AND value = ?", String(t.id))
@@ -93,3 +109,26 @@ onRunFinished((r) => {
   run('DELETE FROM kv WHERE key = ?', `task_run_${r.id}`);
   bus.change('task');
 });
+
+// ---------- the nightly memory cleanup («сон») ----------
+export const MEMORY_SLEEP_PROMPT = `Ночная уборка общей памяти владельца. Мейнфрейм уже сделал резервную копию папки памяти (data/backups/memory-ГГГГММДД.tar.gz), заметки можно править.
+Папка памяти: ${MEMORY_DIR}
+1. Посмотри оглавление (mainframe memory_list) и что было за последние сутки: mainframe recall с days: 1 (разговоры, решения, ответы владельца), при необходимости recall_open.
+2. Сверь заметки с историей суток: новые решения владельца, отменённые договорённости, изменившиеся цены, сроки и статусы. Исправь заметку или сохрани новую через memory_save с replaces: [старая].
+3. Дубли (две заметки про одно) объедини в одну через memory_save с replaces. Противоречия реши по самой свежей истории; если по истории не решить, не угадывай, а спроси владельца.
+4. Относительные даты («вчера», «завтра», «в пятницу», «на следующей неделе») замени абсолютными (по дате updated заметки или по истории).
+5. Устаревшее не удаляй: помечай через memory_save с replaces. memory_delete не используй.
+6. Новое правило работы, которое за сутки родилось из ошибки или прямой просьбы владельца и нужно в каждом разговоре, сохрани коротко с always: true. Всегда-блок ограничен 6 000 символов: если правил много, добавь строку в общую заметку правил из ошибок вместо новой.
+7. Никому не пиши, ничего не публикуй, не меняй файлы вне папки памяти.
+Итог: 3–6 коротких строк, что изменил. Если нужно решение владельца, задай вопрос и дай кнопки [[кнопки: ...]]. Иначе последней строкой [[тихо]].`;
+
+// Created once (MEMORY_SLEEP=1, default) in the default project; the owner can change or turn it off like any task.
+export function ensureMemorySleepTask() {
+  if (!config.memorySleep.on) return null;
+  const id = Number(kvGet('memory_sleep_task', 0));
+  if (id && get('SELECT id FROM tasks WHERE id = ?', id)) return id;
+  if (id) return null; // the owner deleted it: don't bring it back
+  const newId = createTask({ name: 'Ночная уборка памяти', cron: config.memorySleep.cron, prompt: MEMORY_SLEEP_PROMPT, project_id: defaultProject().id });
+  kvSet('memory_sleep_task', newId);
+  return newId;
+}

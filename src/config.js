@@ -12,6 +12,18 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 
 const envFile = path.join(ROOT, '.env');
 if (fs.existsSync(envFile)) process.loadEnvFile(envFile);
+// Exact secret values to mask in journals and history (src/db.js redact): values of secret-looking
+// variables, and stray .env lines without a name (a pasted piece of a key), commented out or not.
+export const SECRET_LITERALS = new Set();
+if (fs.existsSync(envFile)) {
+  for (const raw of fs.readFileSync(envFile, 'utf8').split('\n')) {
+    const line = raw.replace(/^\s*#\s?/, '').trim();
+    const kv = /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["']?(.*?)["']?\s*$/.exec(line);
+    if (kv) { if (/TOKEN|SECRET|KEY|PASS|SESSION|HASH|COOKIE/i.test(kv[1]) && kv[2].length >= 12) SECRET_LITERALS.add(kv[2]); continue; }
+    // A bare token-like piece (no spaces inside, 16+ chars): most likely part of a key.
+    if (/^[A-Za-z0-9_\-+/=.]{16,}$/.test(line)) SECRET_LITERALS.add(line);
+  }
+}
 // An empty token in .env must not shadow the normal `claude auth login` credentials.
 if (!process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
@@ -58,6 +70,9 @@ export const config = {
   sessionRotate: flag('SESSION_ROTATE', true),
   sessionGapHours: Number(env('SESSION_GAP_HOURS', '3')),
   sessionMaxTokens: Number(env('SESSION_MAX_TOKENS', '80000')),
+  // Without automatic rotation: once a finished answer's conversation is bigger than this, one line
+  // at its end suggests /new (once per conversation). 0 turns the hint off.
+  sessionSoftTokens: Number(env('SESSION_SOFT_TOKENS', '250000')),
   permissionMode: env('PERMISSION_MODE', 'bypassPermissions'),
   autoForward: flag('AUTO_FORWARD'),
   autoReply: flag('AUTO_REPLY'),
@@ -106,6 +121,30 @@ config.whisper = {
   url: ['off', 'none', '0'].includes(env('WHISPER_URL').toLowerCase()) ? '' : env('WHISPER_URL', 'http://127.0.0.1:8178').replace(/\/+$/, ''),
   language: env('WHISPER_LANGUAGE'),
 };
+// The subscription hit its limit: the run waits for the reset and continues by itself (LIMIT_RESUME=0: just fail).
+// Payment or login broken: after BREAKER_FAILS errors in a row background work pauses, a cheap check
+// runs every BREAKER_PROBE_MIN minutes until Claude answers again.
+config.limitResume = flag('LIMIT_RESUME', true);
+config.breakerFails = Math.max(1, Number(env('BREAKER_FAILS', '2')) || 2);
+config.breakerProbeMin = Math.max(5, Number(env('BREAKER_PROBE_MIN', '15')) || 15);
+// git push to main/master, vercel --prod and the like: block (default), warn, or off. Allowed when this
+// run passed its tests and the owner's last message agreed to the release.
+config.deployGuard = ['block', 'warn', 'off'].includes(env('DEPLOY_GUARD', 'block').toLowerCase()) ? env('DEPLOY_GUARD', 'block').toLowerCase() : 'block';
+// Work log («что сделано»): its tail goes in front of requests; WORK_LOG_AUTO=0 stops filling it from run results.
+config.workLog = { inject: flag('WORK_LOG_INJECT', true), auto: flag('WORK_LOG_AUTO', true), days: Number(env('WORK_LOG_DAYS', '7')) || 7, max: Number(env('WORK_LOG_MAX_CHARS', '1500')) || 1500 };
+// The computer's bridges (local http MCP servers from mcp.json): checked every minute, restarted over
+// SSH when down (BRIDGE_REPAIR=0: only check), one message after BRIDGE_ALERT_MIN minutes of downtime by day.
+config.bridges = { watch: flag('BRIDGE_WATCH', true), repair: flag('BRIDGE_REPAIR', true), skipDown: flag('BRIDGE_SKIP_DOWN', true), alertMin: Number(env('BRIDGE_ALERT_MIN', '10')) || 10 };
+// claude.ai connectors or other MCP servers never to connect (exact names, comma separated),
+// e.g. MCP_DENY=claude.ai Old connector
+config.mcpDeny = env('MCP_DENY').split(',').map((s) => s.trim()).filter(Boolean);
+// claude.ai connectors always on for these project ids (comma separated), not only when named.
+config.connectorProjects = env('CONNECTOR_PROJECTS').split(',').map((s) => Number(s.trim())).filter(Boolean);
+// Sends the mainframe does itself (mail «Отправить», inbox reply, post «Сейчас»): wait this many seconds
+// with an «Отменить» button first (0: send at once). The same text to the same place goes once a day.
+config.sendUndoSec = Math.max(0, Number(env('SEND_UNDO_SEC', '15')) || 0);
+// Nightly memory cleanup («сон») in the default project: cron in the owner's time zone, MEMORY_SLEEP=0 off.
+config.memorySleep = { on: flag('MEMORY_SLEEP', true), cron: env('MEMORY_SLEEP_CRON', '30 3 * * *'), keep: Number(env('MEMORY_BACKUP_KEEP', '14')) || 14 };
 config.tg.url = env('TG_MCP_URL', `http://127.0.0.1:${config.tg.port}/mcp`);
 config.tg.enabled = Boolean(config.tg.apiId && config.tg.apiHash && config.tg.session) || Boolean(env('TG_MCP_URL'));
 

@@ -5,7 +5,8 @@
 // index of titles the session can open.
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './config.js';
+import { execFileSync } from 'node:child_process';
+import { config, DATA_DIR } from './config.js';
 import { addLog, kvGet, kvSet } from './db.js';
 import { bus } from './bus.js';
 
@@ -186,6 +187,21 @@ export function memoryPrompt() {
 
 ${full.join('\n\n')}
 ${index.length ? `\nОстальные заметки (файл.md: заголовок): ${index.join('; ')}.` : ''}`.trimEnd();
+}
+
+// A copy of the whole memory folder before the nightly cleanup: data/backups/memory-YYYYMMDD.tar.gz,
+// the newest `keep` copies stay.
+export function backupMemory(keep = config.memorySleep.keep) {
+  const dir = path.join(DATA_DIR, 'backups');
+  fs.mkdirSync(dir, { recursive: true });
+  const d = new Date();
+  const name = `memory-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}.tar.gz`;
+  const file = path.join(dir, name);
+  execFileSync('tar', ['-czf', file, '-C', path.dirname(MEMORY_DIR), path.basename(MEMORY_DIR)], { timeout: 120000 });
+  const old = fs.readdirSync(dir).filter((f) => /^memory-\d{8}\.tar\.gz$/.test(f)).sort().reverse().slice(keep);
+  for (const f of old) fs.rmSync(path.join(dir, f));
+  addLog('system', `Память: резервная копия ${name}${old.length ? `, удалено старых: ${old.length}` : ''}`);
+  return file;
 }
 
 export { TYPES as MEMORY_TYPES };

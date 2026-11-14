@@ -47,10 +47,13 @@ export const CONNECTOR_WORDS = ['notion', 'ноушн', 'trello', 'трелло'
 const has = (text, words) => { const t = String(text || '').toLowerCase(); return words.some((w) => t.includes(w)); };
 
 // context: this message plus the project's recent prompts (a follow-up like "да" to a browser task).
-export function chooseTools({ prompt, recent = '' }) {
+// projectId: projects listed in CONNECTOR_PROJECTS always get the claude.ai connectors (a social media
+// project needs Metricool even when the message does not name it).
+export function chooseTools({ prompt, recent = '', projectId = null }) {
   if (!config.toolRouting) return { mac: true, connectors: true, why: 'все инструменты' };
   const ctx = `${prompt}\n${recent}`;
   const mac = has(ctx, [...MAC_WORDS, ...moduleRoutingWords()]);
-  const connectors = has(ctx, CONNECTOR_WORDS);
-  return { mac, connectors, why: [mac ? 'Mac и браузер' : null, connectors ? 'коннекторы claude.ai' : null].filter(Boolean).join(', ') || 'только telegram и mainframe' };
+  const byProject = Boolean(projectId) && config.connectorProjects.includes(Number(projectId));
+  const connectors = byProject || has(ctx, CONNECTOR_WORDS);
+  return { mac, connectors, why: [mac ? 'Mac и браузер' : null, connectors ? `коннекторы claude.ai${byProject ? ' (проект)' : ''}` : null].filter(Boolean).join(', ') || 'только telegram и mainframe' };
 }

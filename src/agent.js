@@ -10,6 +10,10 @@ import { bus } from './bus.js';
 import { buildMcpServers } from './mcp.js';
 import { chooseModel, chooseTools } from './routing.js';
 import { sessionEnv, resolveModel, isClaude, mainModel } from './models.js';
+import { failureKind, noteLimit, limitUntil, breakerOpen, noteAccessFailure, noteSuccess, whenLabel } from './limits.js';
+import { workLogTail, workLogBlock } from './worklog.js';
+import { bridgesDown } from './bridges.js';
+import { deployHooks, consentOf } from './guards.js';
 
 const active = new Map(); // runId -> { abort, projectId, fork, startedAt }
 const forks = new Set(); // runIds started beside a busy session (owner's bot messages)
@@ -26,6 +30,7 @@ const MAINFRAME_PROMPT = `
 Тебе доступны MCP-серверы: ${config.tg.enabled ? 'telegram (аккаунт владельца через Telethon), ' : ''}mainframe (уведомить владельца, поставить cron-задачу, список проектов) и те, что подключены в mcp.json (Apple-приложения, управление Mac, браузер).
 Пиши по-русски, коротко и по делу. Без длинных тире. Только реальные цифры.
 Когда задача сделана, закончи ответ короткой сводкой: что сделано и что осталось.
+Сначала ответ на последнее сообщение владельца. Итоги фоновой работы (агенты и подзадачи, прошлые задачи) не подменяют этот ответ: дай их отдельно и коротко после него.
 У тебя есть терминал на Mac владельца: команды выполняй сам, не проси владельца запускать их, кроме тех, что требуют его пароля (sudo) или входа в аккаунт.
 Чеки, квитанции и переводы, которые владелец присылает фото или текстом, записывай в его финансы через mainframe add_expense (сумма, валюта, где, категория, дата из чека). Скриншоты банков и бирж с балансом: обнови остаток через mainframe set_balance.
 Формат ответа: он приходит владельцу в Telegram rich-сообщением, Markdown рендерит сам Telegram. Первая строка или абзац: суть, коротко. Сравнения таблицей. Статусы чек-листом: «- [x] сделано», «- [ ] осталось». Главное выделяй жирным (жёлтое ==выделение== не используй: в тёмной теме его не видно). Длинные подробности прячь в <details><summary>Подробнее</summary> ... </details> (пустая строка после summary и перед </details>). Дату и время встречи пиши так: ![17 ноября, 14:00](tg://time?unix=<unix>&format=wDT), чтобы каждый видел своё время.
@@ -33,6 +38,9 @@ const MAINFRAME_PROMPT = `
 Входящие: на «не показывай / тихо / пакетом / срочно про X» сначала mainframe inbox_rule_preview, покажи владельцу, сколько и что отсеется за 7 дней (с примерами), и сохраняй inbox_rule_add только после его «да». Список и удаление: inbox_rule_list, inbox_rule_delete.
 Память и история: если не уверен, что помнишь договорённость, цифру или решение, сначала mainframe recall, потом отвечай, не угадывай. Новый факт, который отменяет старый (цена, решение, срок), сохраняй через memory_save с replaces: [старая заметка] или исправь старую заметку. «запомни…» от владельца сохраняй сразу через mainframe memory_save и отвечай одной строкой, что запомнил; «забудь…» через memory_delete; «что ты помнишь про X» и вопросы о прошлом («что решили», «что писал», «когда обсуждали») сначала ищи через mainframe recall (история всех сессий, входящих, почты и переписки в Telegram), потом отвечай с датами.
 Фоновые задачи (по расписанию, из пульта, из другой сессии): этапы и «готово» через notify_owner не шли, владелец получит одно сообщение с итогом задачи, когда она закончится. notify_owner с urgent: true только когда нужно решение владельца прямо сейчас или сломалось важное. Если у задачи по расписанию нет новостей для владельца (всё как обычно, ничего не случилось), последней строкой ответа напиши [[тихо]]: итог останется в пульте, в чат не придёт.
+Передать задачу другому проекту мейнфрейма (там нужная папка, сессия или коннекторы, например Metricool в проекте соцсетей): mainframe start_run {project_id, prompt} (id через list_projects), итог через run_status {run_id, wait_sec}. Локальный API пульта для этого не вызывай.
+Реестр «что сделано» приходит перед сообщением блоком <mainframe-worklog>. Получил результат (коммит, ветка, выкладка, пост, документ) или сменился статус (на проверке, выложено): mainframe work_log_add или work_log_update, коротко.
+Выкладка: скрипты выкладки начинай с set -euo pipefail и не строй цепочки a && b под set -e (сбой внутри цепочки не останавливает скрипт). Пуш в main и выкладка на прод только после зелёных тестов в этой же задаче и явного «да» владельца на выкладку: без этого мейнфрейм не пропустит команду.
 Если менял код самого мейнфрейма (${ROOT}/src), проверь синтаксис (node --check) и вызови mainframe restart_mainframe: он перезапустит мейнфрейм после твоего ответа. Сам службу мейнфрейма не перезапускай (launchctl или systemctl): это оборвёт текущую задачу.
 `.trim();
 
@@ -47,6 +55,7 @@ const INBOX_BLOCKED = [
   'mcp__apple__trash_mail', 'mcp__mainframe__create_cron_task',
   'mcp__claude_ai_Gmail__send_message', 'mcp__claude_ai_Gmail__reply', 'mcp__claude_ai_Gmail__forward',
   'mcp__mail__mail_send', 'mcp__google__manage_event', 'mcp__google__create_event', 'mcp__google__delete_event',
+  'mcp__mainframe__start_run',
 ];
 
 const AUTH_RE = /Failed to authenticate|OAuth session expired|login reached its time limit|Invalid API key|Please run \/login|auth login/i;
@@ -68,11 +77,14 @@ export function setAuthError(message) {
   kvSet('auth_error', message ? { message: message.slice(0, 300), at: now() } : null);
 }
 
-function baseOptions({ cwd, abortController, runId, tools = { mac: true, connectors: true } }) {
+function baseOptions({ cwd, abortController, runId, tools = { mac: true, connectors: true }, guard = null }) {
+  const deploy = guard ? deployHooks(guard, (t) => addEvent(runId, 'system', t)) : {};
+  // Bridges known to be down are left out: the session hears it in one line instead of failing tools.
+  const skip = tools.mac && config.bridges.skipDown ? bridgesDown() : [];
   const options = {
     cwd,
     abortController,
-    mcpServers: buildMcpServers({ mac: tools.mac, connectors: tools.connectors, runId }),
+    mcpServers: buildMcpServers({ mac: tools.mac, connectors: tools.connectors, runId, skip }),
     settingSources: ['user', 'project', 'local'],
     // Shared memory is read at every run start, so a note saved in one project reaches the next run anywhere.
     systemPrompt: { type: 'preset', preset: 'claude_code', append: `${MAINFRAME_PROMPT}\n${memoryPrompt()}` },
@@ -81,15 +93,20 @@ function baseOptions({ cwd, abortController, runId, tools = { mac: true, connect
       PostToolUse: [{
         hooks: [async (input) => {
           addLog('tool', `${input.tool_name}: ${briefInput(input.tool_name, input.tool_input)}`, runId);
+          if (deploy.post) await deploy.post(input);
           return {};
         }],
       }],
+      // Releases: git push to main, vercel --prod... only after tests and the owner's «да» (src/guards.js).
+      ...(deploy.pre ? { PreToolUse: [{ matcher: 'Bash', hooks: [deploy.pre] }] } : {}),
     },
     stderr: (d) => {
       if (AUTH_RE.test(d)) setAuthError(d);
     },
   };
   if (config.permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true;
+  // MCP_DENY: servers never to connect (a dead claude.ai connector failing every session start).
+  if (config.mcpDeny.length) options.managedSettings = { deniedMcpServers: config.mcpDeny.map((serverName) => ({ serverName })) };
   options.model = mainModel(config.workModel || undefined);
   if (!options.model) delete options.model;
   // claude.ai connectors (Notion, Trello, Gmail...) take seconds to connect: off unless named.
@@ -113,13 +130,13 @@ export function macOnline() {
 const waitingNoted = new Set();
 
 // Queue a prompt for a project session. Returns the run id at once; work happens in the background.
-export function startRun({ projectId, prompt, origin = 'ui', inboxId = null }) {
+export function startRun({ projectId, prompt, origin = 'ui', inboxId = null, parentRunId = null }) {
   const project = get('SELECT * FROM projects WHERE id = ?', projectId);
   if (!project) throw new Error('Проект не найден');
   if (!prompt || !prompt.trim()) throw new Error('Пустое сообщение');
   const res = run(
-    'INSERT INTO runs (project_id, session_id, prompt, origin, status, inbox_id, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    projectId, project.session_id, prompt.trim(), origin, 'queued', inboxId, now(),
+    'INSERT INTO runs (project_id, session_id, prompt, origin, status, inbox_id, started_at, parent_run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    projectId, project.session_id, prompt.trim(), origin, 'queued', inboxId, now(), parentRunId,
   );
   const runId = Number(res.lastInsertRowid);
   addLog('run', `[${project.name}] ${origin}: ${prompt.trim().slice(0, 200)}`, runId);
@@ -204,7 +221,7 @@ function rotateReason(project, runId) {
 export async function makeHandoff(project, runId) {
   const rows = all("SELECT id, prompt, result, status, finished_at FROM runs WHERE project_id = ? AND session_id = ? AND id != ? AND status IN ('done','error','stopped') ORDER BY id DESC LIMIT 14", project.id, project.session_id, runId).reverse();
   if (!rows.length) return '';
-  const clean = (t) => String(t || '').replace(/<mainframe-recall>[\s\S]*?<\/mainframe-recall>/g, '').replace(/\s+/g, ' ').trim();
+  const clean = (t) => String(t || '').replace(/<mainframe-(recall|worklog|status)>[\s\S]*?<\/mainframe-\1>/g, '').replace(/\s+/g, ' ').trim();
   const history = rows.map((x) => `Владелец: ${clean(x.prompt).slice(0, 1200)}\nОтвет: ${clean(x.result).slice(0, 1600)}`).join('\n\n');
   let summary = '';
   try {
@@ -223,7 +240,8 @@ export async function makeHandoff(project, runId) {
   // Buttons the last answer offered: the owner may tap one of them next.
   const buttons = /\[\[(?:кнопки|buttons):\s*(.+?)\]\]/i.exec(String(last[last.length - 1]?.result || ''))?.[1];
   const refs = rows.slice(0, -3).map((x) => `run:${x.id}`).join(', ');
-  return `<handoff>\nЭто новая сессия этого чата: прошлая закрыта (${project.name}). Передача дел из неё, это контекст, а не новое задание. Если владелец отвечает кнопкой или коротким «да», ориентируйся на «Ждём ответа» и последние обмены. Дословно любой обмен открывается через mainframe recall_open по ref.\n${summary ? `${summary}\n` : ''}${buttons ? `Последний ответ предлагал кнопки: ${buttons}\n` : ''}Последние обмены:\n${lastLines}${refs ? `\nРаньше в этой сессии: ${refs}` : ''}\n</handoff>\n\n`;
+  const work = config.workLog.inject ? workLogTail({ max: 1000 }) : '';
+  return `<handoff>\nЭто новая сессия этого чата: прошлая закрыта (${project.name}). Передача дел из неё, это контекст, а не новое задание. Если владелец отвечает кнопкой или коротким «да», ориентируйся на «Ждём ответа» и последние обмены. Дословно любой обмен открывается через mainframe recall_open по ref.\n${summary ? `${summary}\n` : ''}${buttons ? `Последний ответ предлагал кнопки: ${buttons}\n` : ''}Последние обмены:\n${lastLines}${refs ? `\nРаньше в этой сессии: ${refs}` : ''}${work ? `\nРеестр «что сделано»:\n${work}` : ''}\n</handoff>\n\n`;
 }
 
 function pump(projectId) {
@@ -243,6 +261,66 @@ function pump(projectId) {
 
 const modelName = (m) => (/sonnet/i.test(m || '') ? 'Sonnet' : /haiku/i.test(m || '') ? 'Haiku' : /opus/i.test(m || '') || !m ? 'Opus' : m);
 
+// Spend: the SDK reports running totals of the whole conversation (a resumed or copied conversation
+// starts from what its transcript saved). A run's own share is the difference with the totals the
+// previous run of the same conversation ended with.
+function usageTotals(m) {
+  const t = { in: 0, out: 0, cr: 0, cw: 0 };
+  for (const u of Object.values(m.modelUsage || {})) {
+    t.in += u.inputTokens || 0; t.out += u.outputTokens || 0; t.cr += u.cacheReadInputTokens || 0; t.cw += u.cacheCreationInputTokens || 0;
+  }
+  return t;
+}
+function usageBase(projectId, sessionId, runId) {
+  if (!sessionId) return { cost: 0, usage: { in: 0, out: 0, cr: 0, cw: 0 }, known: true };
+  const prev = get('SELECT cost_total, usage_total FROM runs WHERE session_id = ? AND id < ? AND cost_total IS NOT NULL ORDER BY id DESC LIMIT 1', sessionId, runId);
+  let usage = { in: 0, out: 0, cr: 0, cw: 0 };
+  try { if (prev?.usage_total) usage = { ...usage, ...JSON.parse(prev.usage_total) }; } catch { /* old row */ }
+  // A conversation from before token accounting: its totals are unknown, this run's tokens too.
+  return { cost: prev?.cost_total || 0, usage, known: !prev || Boolean(prev.usage_total) };
+}
+const minus = (a, b) => (a >= b ? a - b : a); // a reset (/clear, a crash) starts the totals again
+
+// ---------- the subscription's limit: runs wait for the reset (deferred_runs, survives a restart) ----------
+const CONTINUE = '(Лимит подписки Claude сбросился. Продолжи эту задачу с того места, где остановился, сделанное не повторяй.)';
+function deferRun(r, { reason, until, started }) {
+  const prompt = started && !String(r.prompt).startsWith(CONTINUE) ? `${CONTINUE}\n\n${r.prompt}` : r.prompt;
+  run('INSERT INTO deferred_runs (run_id, project_id, origin, inbox_id, prompt, reason, due_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    r.id, r.project_id, r.origin, r.inbox_id, prompt, reason, until || 0, now());
+}
+// Every 30 s: limit runs whose reset came, access runs once the breaker closed.
+let deferredTimer = null;
+export function startDeferred() {
+  if (deferredTimer) return;
+  const tick = () => {
+    if (isPaused()) return;
+    for (const d of all("SELECT * FROM deferred_runs WHERE status = 'waiting' ORDER BY id")) {
+      const ready = d.reason === 'limit' ? Date.now() >= d.due_at && !limitUntil() : !breakerOpen();
+      if (!ready) continue;
+      try {
+        if (!get('SELECT id FROM projects WHERE id = ?', d.project_id)) { run("UPDATE deferred_runs SET status = 'dropped' WHERE id = ?", d.id); continue; }
+        const id = startRun({ projectId: d.project_id, prompt: d.prompt, origin: d.origin, inboxId: d.inbox_id });
+        run("UPDATE deferred_runs SET status = 'started', new_run_id = ? WHERE id = ?", id, d.id);
+        if (d.inbox_id) run('UPDATE inbox SET run_id = ? WHERE id = ?', id, d.inbox_id);
+        addLog('run', `Отложенная задача №${d.run_id} продолжена как №${id}`, id);
+      } catch (e) { addLog('error', `Отложенная задача №${d.run_id}: ${e.message}`); }
+    }
+  };
+  deferredTimer = setInterval(tick, 30000);
+  deferredTimer.unref();
+  setTimeout(tick, 5000).unref();
+}
+
+// One line about what is down, in front of a run that needs the Mac.
+function statusNote(tools) {
+  const lines = [];
+  if (tools.mac) {
+    const down = bridgesDown();
+    if (down.length) lines.push(`Сейчас недоступно на Mac: ${down.join(', ')} (мост не отвечает). Если задача требует их, сразу скажи владельцу об этом, не жди и не повторяй вызовы.`);
+  }
+  return lines.length ? `<mainframe-status>\n${lines.join('\n')}\n</mainframe-status>\n\n` : '';
+}
+
 async function execute(runId, { fork = false } = {}) {
   const r = get('SELECT * FROM runs WHERE id = ?', runId);
   if (!r || r.status !== 'queued') return;
@@ -251,6 +329,21 @@ async function execute(runId, { fork = false } = {}) {
     run("UPDATE runs SET status = 'error', result = 'Проект удалён', finished_at = ? WHERE id = ?", now(), runId);
     bus.change('run', runId);
     return;
+  }
+  // The subscription is at its limit, or broken (payment, login): don't spend a call that will fail.
+  const live = LIVE.has(r.origin);
+  const until = config.limitResume ? limitUntil() : 0;
+  if (until || (breakerOpen() && !live)) {
+    const reason = until ? 'limit' : 'access';
+    if (reason === 'access' && r.origin === 'cron') {
+      // A scheduled task comes again by its schedule: skip this one instead of piling them up.
+      return finishWithout(r, project, 'stopped', 'Пропущено: подписка Claude не работает (оплата или вход), фоновые задачи на паузе.\n[[тихо]]');
+    }
+    deferRun(r, { reason, until, started: false });
+    const line = reason === 'limit'
+      ? `Лимит подписки Claude до ${whenLabel(until)}: выполню это сразу после сброса.${live ? '' : '\n[[тихо]]'}`
+      : 'Подписка Claude не работает (оплата или вход): задача ждёт восстановления и запустится сама.\n[[тихо]]';
+    return finishWithout(r, project, 'deferred', line);
   }
   const onMac = isMacProject(project.cwd);
   if (onMac && !(await macOnline())) {
@@ -284,12 +377,15 @@ async function execute(runId, { fork = false } = {}) {
   // Model and tools by the task: a short "да" doesn't need Opus, a question about money doesn't need the browser.
   const recent = all('SELECT prompt FROM runs WHERE project_id = ? AND id < ? AND started_at > ? ORDER BY id DESC LIMIT 3', project.id, runId, Date.now() - 6 * 3600000)
     .map((x) => String(x.prompt || '').slice(0, 2000)).join('\n');
-  const tools = chooseTools({ prompt: r.prompt, recent });
+  const tools = chooseTools({ prompt: r.prompt, recent, projectId: project.id });
   // A resumed (or forked) session keeps the model its last run used: switching loses the cache.
   const resume = Boolean(project.session_id);
   const lastModel = resume ? get('SELECT model FROM runs WHERE project_id = ? AND session_id = ? AND model IS NOT NULL AND id < ? ORDER BY id DESC LIMIT 1', project.id, project.session_id, runId)?.model : null;
   const pick = chooseModel({ prompt: r.prompt, origin: r.origin, resume, lastModel });
-  const options = baseOptions({ cwd: project.cwd, abortController, runId, tools });
+  // The last exchange of this chat: a short «да» is read together with what it answers.
+  const prev = get("SELECT prompt, result FROM runs WHERE project_id = ? AND id < ? AND status = 'done' ORDER BY id DESC LIMIT 1", project.id, runId);
+  const guard = { consent: consentOf({ prompt: r.prompt, origin: r.origin, prevResult: prev?.result || '' }), testsPassed: false, warnings: [] };
+  const options = baseOptions({ cwd: project.cwd, abortController, runId, tools, guard });
   if (pick.model) options.model = pick.model;
   run('UPDATE runs SET model = ? WHERE id = ?', options.model || null, runId);
   addEvent(runId, 'system', `Модель: ${modelName(options.model)} (${pick.why}) · инструменты: ${tools.why}`);
@@ -303,9 +399,13 @@ async function execute(runId, { fork = false } = {}) {
 
   let status = 'error';
   let result = '';
-  let cost = null;
   let sessionId = project.session_id;
   let lastCtx = 0;
+  let final = null; // the result message of the first turn: the answer to the owner's message
+  const later = []; // results of turns that background work (agents, subtasks) started afterwards
+  let limitReset = null;
+  let lastUsage = null; // the last result message: running totals of spend
+  const base = usageBase(project.id, project.session_id, runId);
   try {
     if (!path.isAbsolute(project.cwd || '')) throw new Error(`Папка проекта должна быть полным путём, сейчас: «${project.cwd || ''}»`);
     if (!fs.existsSync(project.cwd)) fs.mkdirSync(project.cwd, { recursive: true });
@@ -313,13 +413,22 @@ async function execute(runId, { fork = false } = {}) {
     // would break the prompt cache of the whole conversation). Other people's work is skipped.
     let prompt = r.prompt;
     if (fork && !project.session_id) prompt = `${recentSummary(project.id, runId)}${prompt}`;
-    if (handoff) prompt = `${handoff}${prompt}`;
     if (r.origin !== 'inbox') {
-      // The last exchange of this chat: a short «да» is searched together with what it answers.
-      const prev = get("SELECT prompt, result FROM runs WHERE project_id = ? AND id < ? AND status = 'done' ORDER BY id DESC LIMIT 1", project.id, runId);
       const ctx = await recallContext(r.prompt, { project: project.name, context: prev ? `${prev.prompt}\n${prev.result}` : '' }).catch(() => '');
-      if (ctx) { prompt = `${ctx}${r.prompt}`; addEvent(runId, 'system', `Подсказки из памяти: ${(ctx.match(/^- /gm) || []).length}`); }
+      if (ctx) { prompt = `${ctx}${prompt}`; addEvent(runId, 'system', `Подсказки из памяти: ${(ctx.match(/^- /gm) || []).length}`); }
+      // The work register: sent when the conversation has not seen this version of it yet.
+      if (config.workLog.inject) {
+        const tail = workLogTail();
+        const seen = kvGet('worklog_seen', {});
+        const key = project.session_id || `new:${runId}`;
+        if (tail && (handoff || seen[key] !== tail.length + tail.slice(0, 200))) {
+          if (!handoff) prompt = `${workLogBlock(tail)}${prompt}`;
+          if (project.session_id) { seen[key] = tail.length + tail.slice(0, 200); const ks = Object.keys(seen); for (const k of ks.slice(0, Math.max(0, ks.length - 200))) delete seen[k]; kvSet('worklog_seen', seen); }
+        }
+      }
     }
+    prompt = `${statusNote(tools)}${prompt}`;
+    if (handoff) prompt = `${handoff}${prompt}`;
     const q = query({ prompt, options });
     for await (const m of q) {
       if (m.session_id && m.session_id !== sessionId) {
@@ -333,6 +442,9 @@ async function execute(runId, { fork = false } = {}) {
       if (m.type === 'system' && m.subtype === 'init') {
         const failed = (m.mcp_servers || []).filter((s) => s.status !== 'connected').map((s) => `${s.name}: ${s.status}`);
         addEvent(runId, 'system', `Сессия запущена · ${m.model}${failed.length ? ` · MCP не подключены: ${failed.join(', ')}` : ''}`);
+      } else if (m.type === 'rate_limit_event' && m.rate_limit_info?.status === 'rejected' && m.rate_limit_info.resetsAt) {
+        const t = Number(m.rate_limit_info.resetsAt);
+        limitReset = t < 1e12 ? t * 1000 : t;
       } else if (m.type === 'assistant' && !m.parent_tool_use_id) {
         // How big the conversation is now: everything the model read for this step.
         const u = m.message?.usage;
@@ -343,26 +455,60 @@ async function execute(runId, { fork = false } = {}) {
         }
         if (m.error && m.error !== 'authentication_failed') addEvent(runId, 'error', String(m.error));
       } else if (m.type === 'result') {
-        cost = m.total_cost_usd ?? null;
-        result = m.subtype === 'success' ? (m.result || '') : `Ошибка: ${m.subtype}`;
-        status = m.subtype === 'success' && !m.is_error ? 'done' : 'error';
-        if (AUTH_RE.test(result)) setAuthError(result);
-        else if (status === 'done') setAuthError(null);
+        // A background agent finishing after the answer starts another turn with its own result:
+        // the answer to the owner stays the first one, the later ones are reported separately.
+        if (!final) final = m;
+        else if (m.subtype === 'success' && String(m.result || '').trim()) { later.push(m.result); addEvent(runId, 'bg_report', m.result); }
+        // Spend counts every turn: the last result carries the running total.
+        lastUsage = m;
       }
+    }
+    if (final) {
+      result = final.subtype === 'success' ? (final.result || '') : `Ошибка: ${final.subtype}`;
+      status = final.subtype === 'success' && !final.is_error ? 'done' : 'error';
+      if (final.is_error && final.result) result = final.result;
     }
   } catch (e) {
     if (abortController.signal.aborted) {
       status = 'stopped';
       result = 'Остановлено';
+    } else if (final && final.subtype === 'success' && !final.is_error) {
+      // The answer was already given; only the background work after it failed.
+      status = 'done';
+      result = final.result || '';
+      addEvent(runId, 'error', `После ответа: ${e.message}`);
     } else {
       status = 'error';
       result = e.message;
-      if (AUTH_RE.test(e.message)) setAuthError(e.message);
     }
   } finally {
     active.delete(runId);
     if (lastCtx && sessionId) saveCtxTokens(sessionId, lastCtx);
   }
+  const spend = lastUsage ? (() => {
+    const tot = usageTotals(lastUsage);
+    const costTotal = lastUsage.total_cost_usd ?? null;
+    return {
+      costTotal, cost: costTotal == null ? null : Math.round(minus(costTotal, base.cost) * 10000) / 10000,
+      tot, own: base.known ? { in: minus(tot.in, base.usage.in), out: minus(tot.out, base.usage.out), cr: minus(tot.cr, base.usage.cr), cw: minus(tot.cw, base.usage.cw) } : {},
+    };
+  })() : null;
+
+  // The subscription: limit (wait for the reset, continue by itself), payment or login (the breaker).
+  const kind = status === 'error' ? failureKind(result) : null;
+  if (status === 'done') noteSuccess();
+  if (kind === 'access') {
+    setAuthError(result);
+    noteAccessFailure(result);
+    result = `Подписка Claude не работает: оплата или вход (${result.replace(/^Claude Code returned an error result:\s*/i, '').slice(0, 160)}). Проверь claude.ai/settings/billing. Как заработает, задачи по расписанию продолжатся сами.`;
+  } else if (kind === 'limit' && config.limitResume) {
+    const { until: at, first } = noteLimit(result, limitReset);
+    deferRun(r, { reason: 'limit', until: at, started: true });
+    // One line to the owner, once per limit; the rest wait quietly.
+    result = `Упёрся в лимит подписки, продолжу в ${whenLabel(at)}.${first || live ? '' : '\n[[тихо]]'}`;
+    status = 'deferred';
+  } else if (status === 'error' && AUTH_RE.test(result)) setAuthError(result);
+  else if (status === 'done') setAuthError(null);
 
   // The link to the Mac dropped mid-run (tunnel restart, Mac asleep): put the work back once, it
   // resumes the same session as soon as the Mac answers again.
@@ -380,10 +526,24 @@ async function execute(runId, { fork = false } = {}) {
     run('UPDATE projects SET session_id = NULL WHERE id = ?', project.id);
     result += '\nСессия не найдена на диске. Следующее сообщение начнёт новую.';
   }
+  if (guard.warnings.length) result += `\n\n⚠️ ${[...new Set(guard.warnings)].join(' ')}`;
+  // The conversation is big and automatic rotation is off: suggest /new once per conversation.
+  if (status === 'done' && live && !fork && config.sessionSoftTokens > 0 && sessionId && lastCtx > config.sessionSoftTokens) {
+    const hinted = kvGet('session_soft_hinted', {});
+    if (!hinted[sessionId]) {
+      hinted[sessionId] = Date.now();
+      const ks = Object.keys(hinted); for (const k of ks.slice(0, Math.max(0, ks.length - 200))) delete hinted[k];
+      kvSet('session_soft_hinted', hinted);
+      result = appendLine(result, `_Разговор большой (≈${Math.round(lastCtx / 1000)} тыс.), напиши /new: начну новый с передачей дел._`);
+    }
+  }
   const lastText = get("SELECT content FROM run_events WHERE run_id = ? AND kind = 'text' ORDER BY id DESC LIMIT 1", runId)?.content || '';
   if (status === 'error' && (!lastText || !result.includes(lastText.slice(0, 60)))) addEvent(runId, 'error', result);
-  run('UPDATE runs SET status = ?, result = ?, cost = ?, finished_at = ? WHERE id = ?', status, redact(result), cost, now(), runId);
+  run(`UPDATE runs SET status = ?, result = ?, cost = ?, cost_total = ?, usage_total = ?, tokens_in = ?, tokens_out = ?, tokens_cache_read = ?, tokens_cache_write = ?, ctx_tokens = ?, finished_at = ? WHERE id = ?`,
+    status, redact(result), spend?.cost ?? null, spend?.costTotal ?? null, spend ? JSON.stringify(spend.tot) : null,
+    spend?.own.in ?? null, spend?.own.out ?? null, spend?.own.cr ?? null, spend?.own.cw ?? null, lastCtx || null, now(), runId);
   addLog('run', `[${project.name}] ${status === 'done' ? 'готово' : status}: ${result.slice(0, 200)}`, runId);
+  if (later.length) addLog('run', `[${project.name}] отчёты фоновой работы после ответа: ${later.length}`, runId);
   bus.change('run', runId);
   const finished = get('SELECT * FROM runs WHERE id = ?', runId);
   // Notifications and reply drafts run in the background: the next queued run starts now.
@@ -391,8 +551,30 @@ async function execute(runId, { fork = false } = {}) {
     Promise.resolve().then(() => fn(finished, project)).catch((e) => addLog('error', `onRunFinished: ${e.message}`));
   }
 }
+// A line at the end of an answer, above its button lines ([[...]]), so the buttons stay last.
+function appendLine(text, line) {
+  const lines = String(text || '').split('\n');
+  let i = lines.length;
+  while (i > 0 && /^\s*(\[\[.*\]\])?\s*$/.test(lines[i - 1])) i--;
+  return [...lines.slice(0, i), '', line, ...lines.slice(i)].join('\n');
+}
+
+// A run that ends without calling the model (deferred, skipped): same bookkeeping as a normal finish.
+function finishWithout(r, project, status, result) {
+  run('UPDATE runs SET status = ?, result = ?, finished_at = ? WHERE id = ?', status, result, now(), r.id);
+  addLog('run', `[${project.name}] ${status}: ${result.split('\n')[0].slice(0, 200)}`, r.id);
+  bus.change('run', r.id);
+  const finished = get('SELECT * FROM runs WHERE id = ?', r.id);
+  for (const fn of listeners) Promise.resolve().then(() => fn(finished, project)).catch((e) => addLog('error', `onRunFinished: ${e.message}`));
+}
 
 export function stopRun(runId) {
+  // A run waiting for the subscription limit: its continuation is dropped.
+  if (run("UPDATE deferred_runs SET status = 'dropped' WHERE run_id = ? AND status = 'waiting'", Number(runId)).changes) {
+    run("UPDATE runs SET status = 'stopped' WHERE id = ? AND status = 'deferred'", Number(runId));
+    bus.change('run', Number(runId));
+    return true;
+  }
   const a = active.get(Number(runId));
   if (a) {
     a.abort.abort();
@@ -416,6 +598,7 @@ export function stopAll() {
     for (const id of q) run("UPDATE runs SET status = 'stopped', finished_at = ? WHERE id = ?", now(), id);
     queues.set(pid, []);
   }
+  run("UPDATE deferred_runs SET status = 'dropped' WHERE status = 'waiting'");
   kvSet('paused', true);
   addLog('system', 'Всё остановлено. Автоматика на паузе.');
 }
@@ -463,6 +646,9 @@ export function kbGuard(root) {
 
 // One-shot structured call (dispatcher, drafts). Read-only tools, confined to the knowledge base.
 export async function structured({ prompt, schema, system, cwd = config.kbDir, tools = ['Read', 'Grep', 'Glob'], maxTurns = 8, model = config.dispatchModel }) {
+  // The subscription is down or at its limit: fail at once instead of a call that cannot work.
+  if (breakerOpen()) throw new Error('Claude недоступен (оплата или вход): жду восстановления');
+  if (limitUntil()) throw new Error(`Лимит подписки Claude до ${whenLabel(limitUntil())}`);
   const root = fs.existsSync(cwd) ? cwd : config.workspaceDir;
   const options = {
     model: resolveModel(model),
@@ -500,10 +686,14 @@ export async function structured({ prompt, schema, system, cwd = config.kbDir, t
     clearTimeout(timer);
   }
   if (!out) {
+    const kind = failureKind(err);
+    if (kind === 'access') noteAccessFailure(err);
+    else if (kind === 'limit') noteLimit(err);
     if (err && AUTH_RE.test(err)) setAuthError(err);
     throw new Error(err || 'Пустой ответ');
   }
   setAuthError(null);
+  noteSuccess();
   return out;
 }
 
@@ -527,7 +717,7 @@ export async function claudeSessions(limit = 60) {
 const blockText = (content) => (typeof content === 'string' ? content : Array.isArray(content)
   ? content.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') : '');
 
-const SERVICE_TAGS = 'mainframe-recall|task-notification|system-reminder|local-command-stdout|local-command-stderr|local-command-caveat|command-name|command-message|command-args|bash-input|bash-stdout|bash-stderr|user-prompt-submit-hook|tool-use-id|output-file';
+const SERVICE_TAGS = 'mainframe-recall|mainframe-worklog|mainframe-status|handoff|task-notification|system-reminder|local-command-stdout|local-command-stderr|local-command-caveat|command-name|command-message|command-args|bash-input|bash-stdout|bash-stderr|user-prompt-submit-hook|tool-use-id|output-file';
 function cleanUserText(raw) {
   let t = String(raw || '');
   t = t.replace(new RegExp(`<(${SERVICE_TAGS})\\b[^>]*>[\\s\\S]*?<\\/\\1>`, 'g'), '');

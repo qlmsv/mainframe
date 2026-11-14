@@ -9,6 +9,9 @@ import { startRun, stopRun, stopAll, resumeAll, isPaused, activeRuns, claudeSess
 import { forwardItem, replyItem, ignoreItem, classify, restoreItem, chatHistory, suggestReply } from './dispatcher.js';
 import { createTask, updateTask, deleteTask, fireTask, nextRuns, validateCron } from './scheduler.js';
 import { mcpSummary } from './mcp.js';
+import { healthState } from './limits.js';
+import { bridgeStates } from './bridges.js';
+import { listWork } from './worklog.js';
 import { tgState } from './telegram-mcp.js';
 import { botState, ownerId } from './bot.js';
 import { tunnelState } from './tunnel.js';
@@ -107,11 +110,22 @@ async function readBody(req, max = 1_000_000) {
   return raw ? JSON.parse(raw) : {};
 }
 
+// Today's spend: runs started since local midnight (their own share, not the conversation's total).
+// Short service calls (dispatcher, drafts, digests of memory) are not in runs and not counted.
+function usageToday() {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  const x = get("SELECT COUNT(*) n, SUM(COALESCE(tokens_in,0) + COALESCE(tokens_out,0) + COALESCE(tokens_cache_read,0) + COALESCE(tokens_cache_write,0)) tokens, SUM(COALESCE(tokens_out,0)) out, SUM(COALESCE(cost,0)) cost FROM runs WHERE started_at >= ? AND status NOT IN ('queued')", d.getTime());
+  return { runs: x.n || 0, tokens: x.tokens || 0, out: x.out || 0, cost: Math.round((x.cost || 0) * 100) / 100 };
+}
+
 function state(req) {
   const local = isLocal(req);
   return {
     paused: isPaused(),
     authError: kvGet('auth_error', null),
+    usage: usageToday(),
+    claude: healthState(),
+    bridges: bridgeStates(),
     running: activeRuns(),
     counts: {
       inbox: get("SELECT COUNT(*) c FROM inbox WHERE status IN ('new','routed','error')").c,
@@ -153,6 +167,7 @@ export const route = (method, pattern, handler) => {
 };
 
 route('GET', '/api/state', ({ req }) => state(req));
+route('GET', '/api/worklog', () => listWork({ days: 30, limit: 200 }));
 
 route('GET', '/api/inbox', ({ url }) => {
   const filter = url.searchParams.get('filter') || 'open';
