@@ -70,7 +70,9 @@ export function matches(rule, item) {
 // The first matching rule and what it means for this item:
 // 'apply' (do the action), 'exception' (a clear exception: show as usual), 'fuzzy' (the dispatcher decides).
 export function evaluate(item, rules = listRules().filter((r) => r.enabled)) {
-  const rule = rules.find((r) => matches(r, item));
+  // A rule for one chat or sender beats a general one ("all groups quiet, except the back office").
+  const specific = (r) => (r.chat_id || r.sender ? 0 : 1);
+  const rule = [...rules].sort((a, b) => specific(a) - specific(b)).find((r) => matches(r, item));
   if (!rule) return null;
   const text = `${item.name || ''} ${item.text || ''}`.toLowerCase();
   if (rule.except_keywords.some((k) => text.includes(k))) return { rule, outcome: 'exception' };

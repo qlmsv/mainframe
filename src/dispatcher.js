@@ -198,12 +198,20 @@ export async function classify(id) {
   // "ok", "thanks", stickers: a quiet one-line card, so a misread message is still seen.
   if (decision.action === 'note') return notify(item2, 'noted');
   if (isPaused()) return notify(item2, 'routed');
-  const sure = decision.confidence >= 0.75;
   const mode = contact?.mode || 'ask';
   // AUTO_FORWARD / AUTO_REPLY cover people already tied to a project, never strangers.
   const known = Boolean(contact?.project_id);
+  // A work group in "auto" mode: anything that is not small talk goes straight to its project session.
+  const groupAuto = item.source === 'group' && mode === 'auto' && contact?.project_id;
+  if (groupAuto) {
+    decision.action = 'forward'; decision.confidence = 1; decision.project_id = contact.project_id;
+    item2 = update(id, { status: 'routed', decision: JSON.stringify(decision), project_id: contact.project_id });
+  }
+  const sure = decision.confidence >= 0.75;
   if (decision.action === 'forward' && sure && (mode === 'auto' || (config.autoForward && known))) {
     await forwardItem(id, {});
+    // The owner gets one message when the session is done, not a second "sent to session" card.
+    if (groupAuto) return;
     item2 = getItem(id);
     return notify(item2, 'auto_forwarded');
   }
@@ -284,13 +292,23 @@ export async function forwardItem(id, { projectId, text, task } = {}) {
   const decision = item.decision ? JSON.parse(item.decision) : {};
   const pid = Number(projectId || decision.project_id || item.project_id);
   if (!pid) throw new Error('Не выбран проект');
-  const prompt = text || [
+  // A watched work group in "auto" mode: the session only investigates and proposes, the owner decides.
+  const groupAuto = item.source === 'group' && get('SELECT mode FROM contacts WHERE chat_id = ?', item.chat_id)?.mode === 'auto';
+  const prompt = text || (groupAuto ? [
+    `Новые сообщения в рабочей группе Telegram «${item.name}»:`,
+    `"""\n${item.text}\n"""`,
+    (task || decision.task) ? `Суть по мнению диспетчера: ${task || decision.task}` : '',
+    '',
+    'Разберись, в чём проблема: посмотри карточку на доске, прод (только чтение) и код. Ничего не меняй: не правь код и прод, не двигай карточки, никому не пиши.',
+    'Итог одним сообщением владельцу: в чём проблема, что предлагаешь сделать, черновик ответа в группу, если он нужен. Последней строкой кнопки с вариантами решения.',
+    'Если это служебное сообщение без проблемы, ответь одной строкой и поставь [[тихо]].',
+  ].filter(Boolean).join('\n') : [
     `Сообщение от ${item.name}${item.username ? ` (@${item.username})` : ''} в Telegram:`,
     `"""\n${item.text}\n"""`,
     (task || decision.task) ? `Задача: ${task || decision.task}` : 'Выполни эти правки.',
     '',
     'Не пиши этому человеку и никому в Telegram сам. Закончи работу и дай итог: мейнфрейм подготовит ответ и отправит его после одобрения владельца.',
-  ].join('\n');
+  ].join('\n'));
   const runId = startRun({ projectId: pid, prompt, origin: 'inbox', inboxId: id });
   update(id, { status: 'forwarded', project_id: pid, run_id: runId });
   run('UPDATE contacts SET project_id = COALESCE(project_id, ?), updated_at = ? WHERE chat_id = ?', pid, now(), item.chat_id);

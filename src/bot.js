@@ -112,9 +112,11 @@ async function showScreen(ctx, name, arg) {
 const live = new Map(); // runId -> { chatId, userMsgId, draft: bool, timer, last }
 
 async function react(chatId, msgId, emoji) {
-  if (!msgId) return;
-  try { await bot.api.setMessageReaction(chatId, msgId, [{ type: 'emoji', emoji }]); } catch { /* reactions are cosmetic */ }
+  if (!msgId) return false;
+  try { await bot.api.setMessageReaction(chatId, msgId, [{ type: 'emoji', emoji }]); return true; } catch { return false; /* reactions are cosmetic */ }
 }
+// A short acknowledgement: the session answers only [[реакция: 👌]] and the owner's message gets that reaction, no message.
+const REACT_RE = /^\s*\[\[(?:реакция|react):\s*(.+?)\]\]\s*$/i;
 
 // Live status of a run: one ordinary message, edited in place, deleted when the result comes.
 // (Telegram's message drafts made the iPhone app lift the chat and leave an empty area.)
@@ -308,6 +310,7 @@ function extractButtons(text) {
     const c = line.trim().match(/^\[\[(?:копировать|copy):\s*(.+?)\s*\|\s*(.+)\]\]$/i);
     if (c) { copies.push({ label: c[1], text: c[2] }); return false; }
     if (/^\[\[(?:тихо|quiet)\]\]$/i.test(line.trim())) return false;
+    if (/^\[\[(?:реакция|react):.*\]\]$/i.test(line.trim())) return false;
     return true;
   });
   return { text: out.join('\n').trim(), choices, copies };
@@ -766,6 +769,11 @@ export function startBot() {
     }
     if (held.length && !String(r.result || '').trim()) r = { ...r, result: held[held.length - 1] };
     const chat = t?.chatId || ownerId();
+    const ack = r.status === 'done' && t?.userMsgId && REACT_RE.exec(String(r.result || ''));
+    if (ack) {
+      // Telegram allows only some emoji as reactions: an unsupported one falls back to 👍.
+      if (await react(chat, t.userMsgId, ack[1].trim()) || await react(chat, t.userMsgId, '👍')) return;
+    }
     if (t) react(chat, t.userMsgId, r.status === 'done' ? '👍' : r.status === 'stopped' ? '🤷' : '😢');
     // A scheduled task that says exactly the same as its last report within a day stays quiet.
     const task = r.origin === 'cron' && /^\[Задача по расписанию «(.+?)»\]/.exec(r.prompt || '')?.[1];
