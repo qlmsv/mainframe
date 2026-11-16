@@ -11,6 +11,7 @@ import { setMainframeHandlers } from './mcp.js';
 import { transcribeAudio, voiceEnabled } from './voice.js';
 import { setMailApprover, decideSend } from './mailbox.js';
 import * as chatsetup from './chatsetup.js';
+import { quickFor } from './quickbuttons.js';
 import { saveUpload, withAttachments } from './uploads.js';
 import { completeReminder } from './apple.js';
 import { refreshReport } from './social.js';
@@ -560,6 +561,16 @@ export function startBot() {
   }
 
   bot.on('message:text', async (ctx) => {
+    // A quick button: its request goes on as if the owner typed it.
+    const quick = quickFor(ctx.message.text);
+    if (quick?.action === 'new') {
+      const p = currentProject();
+      const ok = requestNewSession(p.id);
+      return ctx.reply(ok ? `🆕 Следующее сообщение начнёт новую сессию в «${esc(p.name)}».` : `Сессия в «${esc(p.name)}» и так новая.`, HTML);
+    }
+    if (quick) {
+      try { return await handleOwnerText(ctx, quick.prompt); } catch (e) { return ctx.reply(`⚠️ Не получилось: ${esc(e.message)}`, HTML); }
+    }
     const menu = menuFor(ctx.message.text);
     if (menu) {
       const map = { home: 'home', inbox: 'inbox', today: 'today', sessions: 'sess', social: 'soc', more: 'sys' };
@@ -859,6 +870,7 @@ export function startBot() {
     if (digest === 'evening') await sendPendingCard().catch((e) => addLog('error', `Память, карточка: ${e.message.slice(0, 120)}`));
   });
 
+  setMainframeHandlers({ refreshMenu: (note) => (ownerId() ? sendMenu(ownerId(), note) : null) });
   setMainframeHandlers({ notify: async (md, { runId = null, urgent = false } = {}) => {
     const r = runId ? get('SELECT origin, status FROM runs WHERE id = ?', runId) : null;
     if (r && BACKGROUND.has(r.origin) && !urgent && ['running', 'queued'].includes(r.status)) {
@@ -905,9 +917,10 @@ export function startBot() {
       addLog('system', `Бот @${me.username} запущен`);
       updateMenuButton();
       // Once: replace the old always-open keyboard with the compact one.
-      if (ownerId() && kvGet('menu_version', 0) < 2) {
-        kvSet('menu_version', 2);
-        bot.api.sendMessage(ownerId(), '⌨️ Меню теперь открывается кнопкой ▦ в поле ввода и не занимает экран.', { reply_markup: mainKeyboard(currentProject()), disable_notification: true }).catch(() => {});
+      // Once more: the menu got quick request buttons.
+      if (ownerId() && kvGet('menu_version', 0) < 3) {
+        kvSet('menu_version', 3);
+        bot.api.sendMessage(ownerId(), '⌨️ В меню появились быстрые кнопки: нажал, и запрос ушёл. Меню открывается кнопкой ▦ в поле ввода. Поменять: напиши «поменяй кнопки…».', { reply_markup: mainKeyboard(currentProject()), disable_notification: true }).catch(() => {});
       }
     },
   }).catch((e) => {

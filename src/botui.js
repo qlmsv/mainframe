@@ -1,6 +1,7 @@
 // Telegram bot screens: HTML layout (expandable quotes, <tg-time>, code), styled inline
 // buttons, copy buttons. Screens are edited in place; the reply keyboard opens them.
 import { InlineKeyboard, Keyboard } from 'grammy';
+import { quickButtons } from './quickbuttons.js';
 import { config } from './config.js';
 import { all, get, run, db, kvGet, defaultProject } from './db.js';
 import { activeRuns, isPaused } from './agent.js';
@@ -89,10 +90,14 @@ export const untok = (key) => { const r = get('SELECT value FROM bot_tokens WHER
 export const MENU = { home: '🏠 Пульт', inbox: '📥 Входящие', today: '📅 Сегодня', sessions: '🧠 Сессии', social: '📊 Соцсети', more: '⚙️ Ещё' };
 export const menuFor = (text) => Object.entries(MENU).find(([, v]) => v === text)?.[0] || null;
 
+// Quick requests 2 in a row (src/quickbuttons.js), then the screens: Пульт, Входящие, Ещё
+// (Сегодня, Сессии, Соцсети open from Пульт).
 export function mainKeyboard(project) {
-  return new Keyboard()
-    .text(MENU.inbox).text(MENU.today).text(MENU.sessions).row()
-    .text(MENU.social).text(MENU.more).text(MENU.home)
+  const kb = new Keyboard();
+  quickButtons().forEach((b, i) => { kb.text(b.label); if (i % 2 === 1) kb.row(); });
+  if (quickButtons().length % 2 === 1) kb.row();
+  return kb
+    .text(MENU.home).text(MENU.inbox).text(MENU.more)
     // Not persistent: on a phone two rows of buttons took a third of the screen. The ▦ button
     // in the input field opens it, and it hides again after a tap.
     .resized().oneTime()

@@ -9,9 +9,11 @@ import { recallHybrid, recallOpen, formatRecall } from './recall.js';
 import { MAC_SERVERS } from './routing.js';
 import { addRule, listRules, deleteRule, previewRule, ACTIONS } from './inbox-rules.js';
 import { moduleTools } from './modules.js';
+import { quickButtons, setQuickButtons } from './quickbuttons.js';
 import { serverBrowserMcp, bridgeOnline } from './modes.js';
 import { mailboxConfigured, mailServer } from './mailbox.js';
 import { googleMcp } from './google.js';
+import { metrikaReport, metrikaCounters } from './metrika.js';
 
 const handlers = {
   notify: async () => { throw new Error('Бот не настроен'); },
@@ -159,6 +161,15 @@ function mainframeServer(runId = null) {
         async () => text(listRules().map((r) => `№${r.id} ${r.description} | ${ACTIONS[r.action]} | ${[r.source, r.chat_id && `чат ${r.chat_id}`, r.sender && `от «${r.sender}»`, r.keywords.length && `слова: ${r.keywords.join(', ')}`].filter(Boolean).join(', ')}${r.except_keywords.length ? ` | кроме слов: ${r.except_keywords.join(', ')}` : ''}${r.except_text ? ` | кроме: ${r.except_text}` : ''} | сработало ${r.hits}, создал ${r.created_by}`).join('\n') || 'Правил нет')),
       tool('inbox_rule_delete', 'Удалить правило входящих по номеру.', { id: z.number().int() },
         async ({ id }) => { const r = deleteRule(id); return text(`Удалено: ${r.description}`); }),
+      tool('quick_buttons_list', 'Быстрые кнопки в меню бота владельца: подпись и запрос, который уходит по нажатию.', {},
+        async () => text(JSON.stringify(quickButtons(), null, 1))),
+      tool('quick_buttons_set', 'Поменять быстрые кнопки в меню бота (владелец просит «поменяй кнопки…»). Передай ПОЛНЫЙ новый список: подпись до 24 символов с эмодзи в начале, prompt: запрос от лица владельца. action: "new" вместо prompt: кнопка новой сессии. Пустой список вернёт набор по умолчанию. После сохранения бот сам пришлёт обновлённое меню.',
+        { buttons: z.array(z.object({ label: z.string(), prompt: z.string().optional(), action: z.enum(['new']).optional() })).max(10) },
+        async ({ buttons }) => {
+          const list = setQuickButtons(buttons);
+          await handlers.refreshMenu?.('⌨️ Кнопки обновлены: открой меню кнопкой ▦ в поле ввода.');
+          return text(`Сохранено: ${list.map((b) => b.label).join(', ')}`);
+        }),
       tool('memory_list', 'Оглавление общей памяти владельца: файлы, типы, описания, даты обновления.', {},
         async () => text(listMemory().map((n) => `${n.file} [${n.type}${n.always ? ", всегда" : ""}, ${n.updated}] ${n.title}: ${n.description}`).join('\n') || 'Память пуста')),
       tool('recall', 'Поиск по всей истории владельца: сессии мейнфрейма (его запросы и ответы), входящие, почта, рабочие группы, переписка в Telegram по дням, общая память. Для вопросов «что решили», «что писал X», «когда обсуждали». Ищет по словам и по смыслу сразу: другая формулировка тоже найдётся. Результаты с датой и источником; полный текст через recall_open.',
