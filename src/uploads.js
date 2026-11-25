@@ -23,5 +23,9 @@ export function saveUpload(name, buffer) {
 export function withAttachments(text, files) {
   if (!files.length) return text;
   const list = files.map((f) => `- ${f}`).join('\n');
-  return `${(text || '').trim() || 'Посмотри вложение.'}\n\nВложения (открой через Read, это скриншоты или файлы от владельца):\n${list}`;
+  const video = files.some((f) => /\.(mp4|mov|m4v|webm|mkv|gif)$/i.test(f));
+  const hint = video
+    ? '\nВидео через Read не открыть: достань кадры (ffmpeg -i файл -vf fps=1/3 кадр_%02d.jpg) и посмотри их через Read, звук расшифруй (ffmpeg в wav, затем whisper).'
+    : '';
+  return `${(text || '').trim() || 'Посмотри вложение.'}\n\nВложения (открой через Read, это скриншоты или файлы от владельца):\n${list}${hint}`;
 }

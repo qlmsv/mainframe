@@ -4,6 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
+import { collectLiterals } from './secrets.js';
 // Slow routes (servers in Russia from Singapore) took longer than Node's 250 ms per address family
 // and every fetch to them failed with ETIMEDOUT: give each attempt 3 s.
 net.setDefaultAutoSelectFamilyAttemptTimeout(3000);
@@ -13,17 +14,12 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const envFile = path.join(ROOT, '.env');
 if (fs.existsSync(envFile)) process.loadEnvFile(envFile);
 // Exact secret values to mask in journals and history (src/db.js redact): values of secret-looking
-// variables, and stray .env lines without a name (a pasted piece of a key), commented out or not.
-export const SECRET_LITERALS = new Set();
-if (fs.existsSync(envFile)) {
-  for (const raw of fs.readFileSync(envFile, 'utf8').split('\n')) {
-    const line = raw.replace(/^\s*#\s?/, '').trim();
-    const kv = /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["']?(.*?)["']?\s*$/.exec(line);
-    if (kv) { if (/TOKEN|SECRET|KEY|PASS|SESSION|HASH|COOKIE/i.test(kv[1]) && kv[2].length >= 12) SECRET_LITERALS.add(kv[2]); continue; }
-    // A bare token-like piece (no spaces inside, 16+ chars): most likely part of a key.
-    if (/^[A-Za-z0-9_\-+/=.]{16,}$/.test(line)) SECRET_LITERALS.add(line);
-  }
-}
+// variables in .env, header and env values in mcp.json, stray key pieces (src/secrets.js).
+const readText = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } };
+export const SECRET_LITERALS = collectLiterals({
+  envText: readText(envFile),
+  mcpText: readText(path.resolve(ROOT, (process.env.MCP_CONFIG || 'mcp.json').replace(/^~/, os.homedir()))),
+});
 // An empty token in .env must not shadow the normal `claude auth login` credentials.
 if (!process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
@@ -130,6 +126,9 @@ config.breakerProbeMin = Math.max(5, Number(env('BREAKER_PROBE_MIN', '15')) || 1
 // git push to main/master, vercel --prod and the like: block (default), warn, or off. Allowed when this
 // run passed its tests and the owner's last message agreed to the release.
 config.deployGuard = ['block', 'warn', 'off'].includes(env('DEPLOY_GUARD', 'block').toLowerCase()) ? env('DEPLOY_GUARD', 'block').toLowerCase() : 'block';
+// Projects where the owner allowed releases without asking each time (a regex matched against the run's
+// folder and the push command, e.g. DEPLOY_TRUSTED_RE=my-site). Tests are still required there.
+config.deployTrusted = (() => { const v = env('DEPLOY_TRUSTED_RE', ''); try { return v ? new RegExp(v, 'i') : null; } catch { return null; } })();
 // Work log («что сделано»): its tail goes in front of requests; WORK_LOG_AUTO=0 stops filling it from run results.
 config.workLog = { inject: flag('WORK_LOG_INJECT', true), auto: flag('WORK_LOG_AUTO', true), days: Number(env('WORK_LOG_DAYS', '7')) || 7, max: Number(env('WORK_LOG_MAX_CHARS', '1500')) || 1500 };
 // The computer's bridges (local http MCP servers from mcp.json): checked every minute, restarted over

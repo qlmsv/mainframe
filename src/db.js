@@ -2,6 +2,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DATA_DIR, config, SECRET_LITERALS } from './config.js';
 import { bus } from './bus.js';
+import { makeRedactor } from './secrets.js';
 
 export const db = new DatabaseSync(path.join(DATA_DIR, 'mainframe.db'));
 // busy_timeout: a helper script or backup holding the file must make writes wait, not crash the mainframe.
@@ -170,13 +171,8 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_inbox_ext ON inbox(source, external_id)'
 export const now = () => Date.now();
 
 // Keys and tokens never get stored: chats with BotFather, pasted configs and tool output are
-// copied into the history, so they are masked on the way in (first characters stay for recognition).
-const SECRET_RE = /(sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|\bAKIA[A-Z0-9]{16}\b|xox[abpr]-[0-9A-Za-z-]{20,}|\b\d{8,10}:AA[A-Za-z0-9_-]{30,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)/g;
-const SECRET_KV_RE = /\b([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|API_KEY|PASSWORD|PASS)[A-Z0-9_]*\s*[=:]\s*)(["']?)([^\s"']{12,})/g;
-// Exact values from .env (secret variables and stray key pieces), longest first.
-const LITERALS = [...SECRET_LITERALS].sort((a, b) => b.length - a.length);
-const maskLiterals = (s) => { for (const v of LITERALS) if (s.includes(v)) s = s.split(v).join(`${v.slice(0, 4)}…[скрыто]`); return s; };
-export const redact = (s) => (s == null ? s : maskLiterals(String(s)).replace(SECRET_RE, (m) => `${m.slice(0, 6)}…[скрыто]`).replace(SECRET_KV_RE, (_, k, q) => `${k}${q}[скрыто]`));
+// copied into the history, so they are masked on the way in (src/secrets.js).
+export const redact = makeRedactor(SECRET_LITERALS);
 
 export const all = (sql, ...args) => db.prepare(sql).all(...args);
 export const get = (sql, ...args) => db.prepare(sql).get(...args);

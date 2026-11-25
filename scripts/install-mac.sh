@@ -100,9 +100,9 @@ PL
   launchctl bootstrap "gui/$(id -u)" "$LA/$1.plist"
 }
 s() { printf '<string>%s</string>' "$@"; }
-agent com.mainframe.bridge-apple "$(s "$SG" --stdio '/Applications/macos-apps-mcp.app/Contents/MacOS/macos-apps-mcp -E -s -P -m macos_apps_mcp shim' --outputTransport streamableHttp --stateful --port 8801)"
-agent com.mainframe.bridge-computer "$(s "$SG" --stdio 'npx -y @zavora-ai/computer-use-mcp' --outputTransport streamableHttp --stateful --port 8802)"
-agent com.mainframe.tunnel "$(s /usr/bin/ssh -N -i "$KEY" -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -R 127.0.0.1:8801:127.0.0.1:8801 -R 127.0.0.1:8802:127.0.0.1:8802 -R 127.0.0.1:8178:127.0.0.1:8178 -R 127.0.0.1:2222:127.0.0.1:22 "$SERVER")"
+agent com.mainframe.bridge-apple "$(s "$SG" --stdio '/Applications/macos-apps-mcp.app/Contents/MacOS/macos-apps-mcp -E -s -P -m macos_apps_mcp shim' --outputTransport streamableHttp --stateful --host 127.0.0.1 --sessionTimeout 600000 --port 8801)"
+agent com.mainframe.bridge-computer "$(s "$SG" --stdio 'npx -y @zavora-ai/computer-use-mcp' --outputTransport streamableHttp --stateful --host 127.0.0.1 --sessionTimeout 600000 --port 8802)"
+agent com.mainframe.tunnel "$(s /usr/bin/ssh -N -i "$KEY" -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ConnectTimeout=15 -R 127.0.0.1:8801:127.0.0.1:8801 -R 127.0.0.1:8802:127.0.0.1:8802 -R 127.0.0.1:8178:127.0.0.1:8178 -R 127.0.0.1:2222:127.0.0.1:22 "$SERVER")"
 sleep 8
 
 say "Настраиваю сервер"

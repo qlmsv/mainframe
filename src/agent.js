@@ -7,13 +7,14 @@ import { query, listSessions, getSessionMessages } from '@anthropic-ai/claude-ag
 import { config, ROOT } from './config.js';
 import { all, get, run, now, addLog, kvGet, kvSet, redact } from './db.js';
 import { bus } from './bus.js';
-import { buildMcpServers } from './mcp.js';
-import { chooseModel, chooseTools } from './routing.js';
+import { buildMcpServers, composioConfigured } from './mcp.js';
+import { chooseModel, chooseTools, TG_RARE_TOOLS } from './routing.js';
 import { sessionEnv, resolveModel, isClaude, mainModel } from './models.js';
-import { failureKind, noteLimit, limitUntil, breakerOpen, noteAccessFailure, noteSuccess, whenLabel } from './limits.js';
+import { failureKind, noteLimit, limitUntil, breakerOpen, noteAccessFailure, noteSuccess, whenLabel, checkLimitNow } from './limits.js';
 import { workLogTail, workLogBlock } from './worklog.js';
 import { bridgesDown } from './bridges.js';
-import { deployHooks, consentOf } from './guards.js';
+import { deployHooks, consentOf, systemHooks, sysConsent } from './guards.js';
+import { pickFinal } from './finalpick.js';
 
 const active = new Map(); // runId -> { abort, projectId, fork, startedAt }
 const forks = new Set(); // runIds started beside a busy session (owner's bot messages)
@@ -22,6 +23,10 @@ const queues = new Map(); // projectId -> [runId]
 const listeners = new Set(); // fn(run) on finish
 
 export const onRunFinished = (fn) => listeners.add(fn);
+// The answer to the owner went out while background work (agents) keeps the run going.
+const answeredListeners = new Set();
+export const onRunAnswered = (fn) => answeredListeners.add(fn);
+const EARLY_AFTER_MS = 3000;
 export const isPaused = () => kvGet('paused', false);
 export const activeRuns = () => [...active.keys()];
 
@@ -39,7 +44,8 @@ const MAINFRAME_PROMPT = `
 Кнопки меню бота: на «поменяй кнопки / добавь кнопку / убери кнопку» посмотри mainframe quick_buttons_list и сохрани полный новый список через quick_buttons_set (без лишних вопросов, если понятно, что нужно).
 Память и история: если не уверен, что помнишь договорённость, цифру или решение, сначала mainframe recall, потом отвечай, не угадывай. Новый факт, который отменяет старый (цена, решение, срок), сохраняй через memory_save с replaces: [старая заметка] или исправь старую заметку. «запомни…» от владельца сохраняй сразу через mainframe memory_save и отвечай одной строкой, что запомнил; «забудь…» через memory_delete; «что ты помнишь про X» и вопросы о прошлом («что решили», «что писал», «когда обсуждали») сначала ищи через mainframe recall (история всех сессий, входящих, почты и переписки в Telegram), потом отвечай с датами.
 Фоновые задачи (по расписанию, из пульта, из другой сессии): этапы и «готово» через notify_owner не шли, владелец получит одно сообщение с итогом задачи, когда она закончится. notify_owner с urgent: true только когда нужно решение владельца прямо сейчас или сломалось важное. Если у задачи по расписанию нет новостей для владельца (всё как обычно, ничего не случилось), последней строкой ответа напиши [[тихо]]: итог останется в пульте, в чат не придёт.
-Передать задачу другому проекту мейнфрейма (там нужная папка, сессия или коннекторы, например Metricool в проекте соцсетей): mainframe start_run {project_id, prompt} (id через list_projects), итог через run_status {run_id, wait_sec}. Локальный API пульта для этого не вызывай.
+Долгая работа в чате с владельцем (его сообщение из бота): если задача займёт больше 2-3 минут (правки кода, выкладка, проверка сайта, поиск, много шагов), не держи владельца. Отдай её фоновому агенту (Agent с run_in_background: true; задание целиком, агент не видит разговор) и сразу ответь 1-2 строками: что взял и что пришлёшь. Этот ответ уйдёт владельцу сразу, а когда агент закончит, перескажи его итог коротко: он придёт отдельным сообщением. Работу, отданную агенту или другому проекту, сам не повторяй. Вопросы, уточнения и дела на минуту делай сразу, без фона.
+Передать задачу другому проекту мейнфрейма (там нужная папка, сессия или коннекторы, например Metricool в проекте соцсетей): mainframe start_run {project_id, prompt} (id через list_projects), итог через run_status {run_id, wait_sec}. Из чата с владельцем ставь долгую задачу с quiet: false (проект сам пришлёт итог владельцу) и не жди её через run_status. Локальный API пульта для этого не вызывай.
 Реестр «что сделано» приходит перед сообщением блоком <mainframe-worklog>. Получил результат (коммит, ветка, выкладка, пост, документ) или сменился статус (на проверке, выложено): mainframe work_log_add или work_log_update, коротко.
 Выкладка: скрипты выкладки начинай с set -euo pipefail и не строй цепочки a && b под set -e (сбой внутри цепочки не останавливает скрипт). Пуш в main и выкладка на прод только после зелёных тестов в этой же задаче и явного «да» владельца на выкладку: без этого мейнфрейм не пропустит команду.
 Если менял код самого мейнфрейма (${ROOT}/src), проверь синтаксис (node --check) и вызови mainframe restart_mainframe: он перезапустит мейнфрейм после твоего ответа. Сам службу мейнфрейма не перезапускай (launchctl или systemctl): это оборвёт текущую задачу.
@@ -57,7 +63,15 @@ const INBOX_BLOCKED = [
   'mcp__claude_ai_Gmail__send_message', 'mcp__claude_ai_Gmail__reply', 'mcp__claude_ai_Gmail__forward',
   'mcp__mail__mail_send', 'mcp__google__manage_event', 'mcp__google__create_event', 'mcp__google__delete_event',
   'mcp__mainframe__start_run',
+  // Read only: someone else's text must not reach the terminal, files, the scheduler or a write in Composio.
+  'Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'KillShell', 'Task', 'Agent',
+  'mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL', 'mcp__composio__COMPOSIO_PROXY_EXECUTE', 'mcp__composio__COMPOSIO_REMOTE_BASH_TOOL',
+  'mcp__composio__COMPOSIO_REMOTE_WORKBENCH', 'mcp__composio__COMPOSIO_MANAGE_CONNECTIONS', 'mcp__composio__COMPOSIO_MANAGE_SKILL',
+  'mcp__composio__COMPOSIO_USE_SKILL', 'mcp__composio__COMPOSIO_SUBMIT_FEEDBACK',
+  'mcp__mainframe__restart_mainframe', 'mcp__mainframe__memory_delete', 'mcp__mainframe__inbox_rule_add', 'mcp__mainframe__inbox_rule_delete',
+  'mcp__mainframe__add_expense', 'mcp__mainframe__set_balance', 'mcp__mainframe__linkedin_post', 'mcp__mainframe__content_mark',
 ];
+export { INBOX_BLOCKED };
 
 const AUTH_RE = /Failed to authenticate|OAuth session expired|login reached its time limit|Invalid API key|Please run \/login|auth login/i;
 
@@ -79,13 +93,14 @@ export function setAuthError(message) {
 }
 
 function baseOptions({ cwd, abortController, runId, tools = { mac: true, connectors: true }, guard = null }) {
-  const deploy = guard ? deployHooks(guard, (t) => addEvent(runId, 'system', t)) : {};
+  const deploy = guard ? deployHooks(guard, (t) => addEvent(runId, 'system', t), cwd) : {};
+  const sys = guard ? systemHooks(guard, cwd, (t) => addEvent(runId, 'system', t)) : null;
   // Bridges known to be down are left out: the session hears it in one line instead of failing tools.
   const skip = tools.mac && config.bridges.skipDown ? bridgesDown() : [];
   const options = {
     cwd,
     abortController,
-    mcpServers: buildMcpServers({ mac: tools.mac, connectors: tools.connectors, runId, skip }),
+    mcpServers: buildMcpServers({ mac: tools.mac, connectors: tools.connectors, telegram: tools.telegram !== false, composio: tools.composio !== false, runId, skip }),
     settingSources: ['user', 'project', 'local'],
     // Shared memory is read at every run start, so a note saved in one project reaches the next run anywhere.
     systemPrompt: { type: 'preset', preset: 'claude_code', append: `${MAINFRAME_PROMPT}\n${memoryPrompt()}` },
@@ -99,7 +114,8 @@ function baseOptions({ cwd, abortController, runId, tools = { mac: true, connect
         }],
       }],
       // Releases: git push to main, vercel --prod... only after tests and the owner's «да» (src/guards.js).
-      ...(deploy.pre ? { PreToolUse: [{ matcher: 'Bash', hooks: [deploy.pre] }] } : {}),
+      // System commands (sudo, rm -rf outside the project, /etc, systemctl, firewall): only with the owner's word.
+      ...(deploy.pre || sys ? { PreToolUse: [{ matcher: 'Bash', hooks: [...(deploy.pre ? [deploy.pre] : []), ...(sys ? [sys] : [])] }] } : {}),
     },
     stderr: (d) => {
       if (AUTH_RE.test(d)) setAuthError(d);
@@ -159,7 +175,7 @@ export function startRun({ projectId, prompt, origin = 'ui', inboxId = null, par
 
 function shouldFork(projectId) {
   const main = [...active.values()].find((a) => a.projectId === projectId && !a.fork);
-  if (main) return Date.now() - main.startedAt > FORK_AFTER_MS;
+  if (main) return main.answered || Date.now() - main.startedAt > FORK_AFTER_MS;
   // Nothing running yet, but the queue holds work: the new message would still wait behind it.
   return false;
 }
@@ -333,6 +349,8 @@ async function execute(runId, { fork = false } = {}) {
   }
   // The subscription is at its limit, or broken (payment, login): don't spend a call that will fail.
   const live = LIVE.has(r.origin);
+  // Kai writes himself: check the subscription for real, the limit may already be reset.
+  if (live && limitUntil()) await checkLimitNow();
   const until = config.limitResume ? limitUntil() : 0;
   if (until || (breakerOpen() && !live)) {
     const reason = until ? 'limit' : 'access';
@@ -378,14 +396,14 @@ async function execute(runId, { fork = false } = {}) {
   // Model and tools by the task: a short "да" doesn't need Opus, a question about money doesn't need the browser.
   const recent = all('SELECT prompt FROM runs WHERE project_id = ? AND id < ? AND started_at > ? ORDER BY id DESC LIMIT 3', project.id, runId, Date.now() - 6 * 3600000)
     .map((x) => String(x.prompt || '').slice(0, 2000)).join('\n');
-  const tools = chooseTools({ prompt: r.prompt, recent, projectId: project.id });
+  const tools = chooseTools({ prompt: r.prompt, recent, projectId: project.id, origin: r.origin, composioOn: composioConfigured() });
   // A resumed (or forked) session keeps the model its last run used: switching loses the cache.
   const resume = Boolean(project.session_id);
   const lastModel = resume ? get('SELECT model FROM runs WHERE project_id = ? AND session_id = ? AND model IS NOT NULL AND id < ? ORDER BY id DESC LIMIT 1', project.id, project.session_id, runId)?.model : null;
   const pick = chooseModel({ prompt: r.prompt, origin: r.origin, resume, lastModel });
   // The last exchange of this chat: a short «да» is read together with what it answers.
   const prev = get("SELECT prompt, result FROM runs WHERE project_id = ? AND id < ? AND status = 'done' ORDER BY id DESC LIMIT 1", project.id, runId);
-  const guard = { consent: consentOf({ prompt: r.prompt, origin: r.origin, prevResult: prev?.result || '' }), testsPassed: false, warnings: [] };
+  const guard = { consent: consentOf({ prompt: r.prompt, origin: r.origin, prevResult: prev?.result || '' }), testsPassed: false, warnings: [], origin: r.origin, sysOk: sysConsent({ prompt: r.prompt, origin: r.origin }) };
   const options = baseOptions({ cwd: project.cwd, abortController, runId, tools, guard });
   if (pick.model) options.model = pick.model;
   run('UPDATE runs SET model = ? WHERE id = ?', options.model || null, runId);
@@ -396,7 +414,8 @@ async function execute(runId, { fork = false } = {}) {
   if (fork && project.session_id) options.forkSession = true;
   // Work started by someone else's Telegram message: their text is untrusted, so the session
   // cannot message anyone, send mail or schedule itself. Replies go through the owner.
-  if (r.origin === 'inbox') options.disallowedTools = INBOX_BLOCKED;
+  const deny = [...(r.origin === 'inbox' ? INBOX_BLOCKED : []), ...(tools.telegram !== false && !tools.tgRare ? TG_RARE_TOOLS : [])];
+  if (deny.length) options.disallowedTools = deny;
 
   let status = 'error';
   let result = '';
@@ -406,6 +425,7 @@ async function execute(runId, { fork = false } = {}) {
   const later = []; // results of turns that background work (agents, subtasks) started afterwards
   let limitReset = null;
   let lastUsage = null; // the last result message: running totals of spend
+  let earlyTimer = null; // sends the answer early when background work keeps the run going
   const base = usageBase(project.id, project.session_id, runId);
   try {
     if (!path.isAbsolute(project.cwd || '')) throw new Error(`Папка проекта должна быть полным путём, сейчас: «${project.cwd || ''}»`);
@@ -458,8 +478,22 @@ async function execute(runId, { fork = false } = {}) {
       } else if (m.type === 'result') {
         // A background agent finishing after the answer starts another turn with its own result:
         // the answer to the owner stays the first one, the later ones are reported separately.
-        if (!final) final = m;
-        else if (m.subtype === 'success' && String(m.result || '').trim()) { later.push(m.result); addEvent(runId, 'bg_report', m.result); }
+        // An empty first result is replaced by the first non-empty one (src/finalpick.js).
+        const picked = pickFinal(final, m);
+        final = picked.final;
+        if (picked.report) { later.push(picked.report); addEvent(runId, 'bg_report', picked.report); }
+        // The owner's message is answered but the run goes on (a background agent): the answer
+        // goes out now instead of after all the background work.
+        if (live && !fork && !earlyTimer && final.subtype === 'success' && !final.is_error && String(final.result || '').trim()) {
+          const answer = final.result;
+          earlyTimer = setTimeout(() => {
+            const a = active.get(runId);
+            if (a) a.answered = true;
+            addEvent(runId, 'system', 'Ответ отправлен, фоновая работа продолжается');
+            const row = get('SELECT * FROM runs WHERE id = ?', runId);
+            for (const fn of answeredListeners) Promise.resolve().then(() => fn({ ...row, status: 'done', result: answer, finished_at: now() }, project)).catch((e) => addLog('error', `onRunAnswered: ${e.message}`));
+          }, EARLY_AFTER_MS);
+        }
         // Spend counts every turn: the last result carries the running total.
         lastUsage = m;
       }
@@ -483,6 +517,7 @@ async function execute(runId, { fork = false } = {}) {
       result = e.message;
     }
   } finally {
+    if (earlyTimer) clearTimeout(earlyTimer);
     active.delete(runId);
     if (lastCtx && sessionId) saveCtxTokens(sessionId, lastCtx);
   }

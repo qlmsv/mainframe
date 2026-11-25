@@ -1,4 +1,16 @@
 // Мейнфрейм: один интерфейс для браузера на Mac, телефона и Telegram Mini App.
+// The new pult (public/next/): ?ui=next or the saved choice opens it, ?ui=old clears the choice.
+// The hash is kept: it carries the Telegram Mini App init data.
+{
+  const ui = new URLSearchParams(location.search).get('ui');
+  let next = ui === 'next';
+  try {
+    if (ui === 'next') localStorage.setItem('mf_ui', 'next');
+    else if (ui === 'old') localStorage.removeItem('mf_ui');
+    else next = localStorage.getItem('mf_ui') === 'next';
+  } catch { /* private mode */ }
+  if (next) { location.replace(`/next/${location.search}${location.hash}`); await new Promise(() => {}); }
+}
 const tg = window.Telegram?.WebApp;
 const inTelegram = Boolean(tg?.initData);
 
@@ -1430,7 +1442,8 @@ function viewSystemHost() {
     ${modelBlock()}
     ${connectBlock()}
     <details class="card raised fold"><summary class="sec-title">${icon('system')}Подключения и настройки</summary>${viewSystem()}</details>
-    <details class="card raised fold"><summary class="sec-title">${icon('log')}Журнал</summary>${viewLog()}</details>`;
+    <details class="card raised fold"><summary class="sec-title">${icon('log')}Журнал</summary>${viewLog()}</details>
+    <section class="card raised"><div class="row"><span class="grow"><b>Новый пульт</b><span class="faint" style="display:block">Виджеты на фоне бухты. Вернуться можно кнопкой «Старый пульт» в его «Системе».</span></span><button class="btn primary small" data-action="ui-next">Новый пульт</button></div></section>`;
 }
 
 const PRESETS = [
@@ -1957,6 +1970,7 @@ document.addEventListener('click', async (e) => {
       if (out) { S.view = 'sessions'; SEG.sessions = 'chats'; saveSeg(); S.project = Number(id); S.detail = true; localStorage.setItem('mf_view', 'sessions'); instant({ fresh: true }); await refresh(); }
       break;
     }
+    case 'ui-next': try { localStorage.setItem('mf_ui', 'next'); } catch { /* private mode */ } location.href = `/next/${location.hash}`; break;
     case 'delete-task': if (await ask('Удалить задачу?')) await act(() => api(`/api/tasks/${id}`, { method: 'DELETE' }), 'Удалено'); break;
     default: if (MOD_ACTIONS[d.action]) await MOD_ACTIONS[d.action](id, el); break;
   }

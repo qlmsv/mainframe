@@ -1,3 +1,4 @@
+import { staticPublic } from './webstatic.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
@@ -426,7 +427,15 @@ const CSP = [
   "form-action 'self'",
 ].join('; ');
 
-function serveStatic(res, pathname) {
+function staticOwner(req) {
+  const host = (req.headers.host || '').split(':')[0];
+  if (isLocal(req) && ['127.0.0.1', 'localhost'].includes(host)) return true;
+  const tok = cookies(req).mf_token;
+  return Boolean(tok && safeEq(String(tok), config.dashboardToken));
+}
+
+function serveStatic(res, pathname, req = null) {
+  if (req && !staticPublic(pathname) && !staticOwner(req)) return send(res, 404, 'Не найдено');
   // A folder in public/ opens its index.html (/tour and /tour/ both work).
   const dir = path.normalize(path.join(PUBLIC, pathname));
   if (pathname !== '/' && dir.startsWith(PUBLIC + path.sep) && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
@@ -544,7 +553,7 @@ export function startWeb() {
       // First-run wizard: only while SETUP_CODE is set and the setup is not finished.
       if (url.pathname === '/setup' || url.pathname.startsWith('/setup/') || url.pathname.startsWith('/api/setup/')) return await handleSetup(req, res, url);
       if (url.pathname === '/' && setup.setupOpen() && !cookies(req).mf_token) return send(res, 302, '', { location: '/setup/' });
-      if (!url.pathname.startsWith('/api/')) return serveStatic(res, url.pathname);
+      if (!url.pathname.startsWith('/api/')) return serveStatic(res, url.pathname, req);
       const who = authorized(req);
       if (!who) return send(res, 401, { error: 'Нет доступа. Открой через бота или по ссылке с токеном.' });
       if (url.pathname === '/api/events') return sse(req, res);

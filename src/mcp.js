@@ -177,6 +177,14 @@ function mainframeServer(runId = null) {
         async (a) => text(formatRecall(await recallHybrid(a)))),
       tool('recall_open', 'Открыть целиком запись из поиска recall по её ref (переписка за день, сессия, письмо).', { ref: z.string() },
         async ({ ref }) => { const d = recallOpen(ref); return text(`${d.title} (${new Date(d.at || 0).toLocaleString('ru')})\n\n${d.body.slice(0, 30000)}`); }),
+      tool('metrika_report', 'Отчёт Яндекс Метрики по сайтам владельца (его токен уже настроен, ключ не нужен). Без counter вернёт список счётчиков. counter: номер счётчика или часть адреса сайта. Даты: YYYY-MM-DD, today, yesterday, 7daysAgo. metrics и dimensions в синтаксисе API Метрики (ym:s:visits, ym:s:users, ym:s:date, ym:s:lastTrafficSource, ym:s:startURL).',
+        { counter: z.string().optional(), date1: z.string().optional(), date2: z.string().optional(), metrics: z.string().optional(), dimensions: z.string().optional(), filters: z.string().optional(), sort: z.string().optional(), limit: z.number().int().optional() },
+        async (a) => {
+          try {
+            if (!a.counter) return text(JSON.stringify(await metrikaCounters(), null, 1));
+            return text(JSON.stringify(await metrikaReport(a), null, 1));
+          } catch (e) { return { ...text(e.message), isError: true }; }
+        }),
       tool('list_projects', 'Список проектов мейнфрейма с их папками.', {},
         async () => text(JSON.stringify(all('SELECT id, name, cwd, description FROM projects'), null, 1))),
       tool('start_run', 'Передать задачу другому проекту мейнфрейма (его сессия, папка и коннекторы, например Metricool в проекте соцсетей). Возвращает номер задачи; итог через run_status. quiet: true (по умолчанию) итог не приходит владельцу в чат, ты сам перескажешь его; false: проект пришлёт итог владельцу сам.',
@@ -218,11 +226,13 @@ function mainframeServer(runId = null) {
 // mac=false leaves out the Mac, app and browser servers (apple, computer, chrome, jev, cua):
 // they stay in mcp.json, they are just not started for a session that doesn't need them.
 // mac: the work is about the computer, browser, mail or calendar (src/routing.js chooseTools).
+// telegram=false leaves out the owner's Telegram account (240 tools), composio=false the Composio server.
 // skip: more servers to leave out (bridges known to be down, see src/bridges.js).
-export function buildMcpServers({ mac = true, connectors = false, runId = null, skip: extra = [] } = {}) {
-  const skip = [...(mac ? [] : MAC_SERVERS), ...extra];
+export const composioConfigured = () => Boolean(readMcpConfig().composio);
+export function buildMcpServers({ mac = true, connectors = false, telegram = true, composio = true, runId = null, skip: extra = [] } = {}) {
+  const skip = [...(mac ? [] : MAC_SERVERS), ...(composio ? [] : ['composio']), ...extra];
   const servers = { ...Object.fromEntries(Object.entries(readMcpConfig()).filter(([n]) => !skip.includes(n))), mainframe: mainframeServer(runId) };
-  if (config.tg.enabled) servers.telegram = { type: 'http', url: config.tg.url };
+  if (config.tg.enabled && telegram) servers.telegram = { type: 'http', url: config.tg.url };
   if (mac) {
     // The browser on the server: when there is no computer browser, or the computer is off.
     const sb = serverBrowserMcp();

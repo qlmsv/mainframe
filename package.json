@@ -6,7 +6,8 @@
   "description": "Личный мейнфрейм на Claude Agent SDK: Telegram, сессии, cron, Mac",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/index.js",
-    "dev": "node --disable-warning=ExperimentalWarning --watch src/index.js"
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/index.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "engines": {
     "node": ">=22.13"

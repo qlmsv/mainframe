@@ -7,7 +7,7 @@
 //   BREAKER_PROBE_MIN minutes whether Claude answers again.
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from './config.js';
-import { kvGet, kvSet, addLog, now } from './db.js';
+import { kvGet, kvSet, addLog, now, run } from './db.js';
 import { bus } from './bus.js';
 import { sessionEnv, resolveModel, isClaude } from './models.js';
 
@@ -76,6 +76,22 @@ export function noteLimit(text, resetAt = null) {
   bus.change('claude_health');
   return { until, first };
 }
+// The limit ended early (Kai reset it or bought extra usage): drop the wait and release deferred runs now.
+export function clearLimit(why = 'Claude снова отвечает') {
+  if (!kvGet('claude_limit', {}).until) return;
+  kvSet('claude_limit', {});
+  run("UPDATE deferred_runs SET due_at = 0 WHERE status = 'waiting' AND reason = 'limit'");
+  addLog('system', `Лимит подписки снят раньше срока: ${why}, отложенные задачи запускаю`);
+  bus.change('claude_health');
+}
+// A real check instead of trusting the reset time: at most once a minute, shared between callers.
+let limitCheck = { at: 0, p: null };
+export function checkLimitNow() {
+  if (!limitUntil()) return Promise.resolve(true);
+  if (limitCheck.p && Date.now() - limitCheck.at < 60000) return limitCheck.p;
+  limitCheck = { at: Date.now(), p: probeClaude().then((r) => { if (r.ok) clearLimit(); return r.ok; }).catch(() => false) };
+  return limitCheck.p;
+}
 export function limitUntil() {
   const st = kvGet('claude_limit', {});
   return st.until && Date.now() < st.until ? st.until : 0;
@@ -136,6 +152,8 @@ export async function probeClaude() {
 
 let probing = false;
 export function startBreakerProbe() {
+  // While a limit is noted, check every 10 minutes whether Claude already answers.
+  setInterval(() => { if (limitUntil() && Date.now() - limitCheck.at > 10 * 60000) checkLimitNow(); }, 60000).unref();
   setInterval(async () => {
     const b = breaker();
     if (!b.open || probing || Date.now() - (b.lastProbe || 0) < config.breakerProbeMin * 60000) return;

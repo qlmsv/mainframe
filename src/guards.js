@@ -23,7 +23,7 @@ export function consentOf({ prompt, origin, prevResult = '' }) {
 }
 
 // state: { consent, testsPassed, warnings: [] }, one per run.
-export function deployHooks(state, onEvent = () => {}) {
+export function deployHooks(state, onEvent = () => {}, cwd = '') {
   if (config.deployGuard === 'off') return {};
   const pre = async (input) => {
     if (input.tool_name !== 'Bash') return {};
@@ -31,8 +31,9 @@ export function deployHooks(state, onEvent = () => {}) {
     if (!DEPLOY_RE.test(cmd)) return {};
     const missing = [];
     if (!state.testsPassed && !state.consent.noTests) missing.push('в этой задаче ещё не было успешного прогона тестов (запусти тесты проекта; если тестов нет, спроси владельца, можно ли выкладывать без тестов)');
-    if (!state.consent.release) missing.push('в последнем сообщении владельца нет явного согласия на выкладку (спроси его и дождись «да, выкладывай»)');
-    if (!missing.length) { onEvent(`Выкладка разрешена: тесты ${state.testsPassed ? 'прошли' : 'пропущены по слову владельца'}, есть согласие`); return {}; }
+    const trusted = !!config.deployTrusted && (config.deployTrusted.test(cmd) || config.deployTrusted.test(String(cwd)));
+    if (!state.consent.release && !trusted) missing.push('в последнем сообщении владельца нет явного согласия на выкладку (спроси его и дождись «да, выкладывай»)');
+    if (!missing.length) { onEvent(`Выкладка разрешена: тесты ${state.testsPassed ? 'прошли' : 'пропущены по слову владельца'}, ${state.consent.release ? 'есть согласие' : 'проект с постоянным разрешением владельца'}`); return {}; }
     const why = `Защита выкладки: ${missing.join('; ')}.`;
     if (config.deployGuard === 'warn') {
       state.warnings.push(why);
@@ -52,4 +53,63 @@ export function deployHooks(state, onEvent = () => {}) {
     return {};
   };
   return { pre, post };
+}
+
+// ---------- system commands ----------
+// sudo, rm -rf outside /tmp and the project folder, writes to /etc, systemctl, firewall (iptables, ufw,
+// nft, pfctl): only when the owner's last message asks for work (or agrees to it). Someone else's
+// message never gets them (inbox runs have no Bash at all). Scheduled tasks were written by the owner.
+const SYS_PATTERNS = [
+  [/(?:^|[\s;&|(`$])sudo\s/, 'sudo'],
+  [/(?:^|[\s;&|(`$])(?:systemctl|service)\s+(?:start|stop|restart|reload|enable|disable|mask|kill|daemon-reload|isolate)\b/, 'управление службами'],
+  [/(?:^|[\s;&|(`$])(?:iptables|ip6tables|nft|ufw|pfctl|firewall-cmd)\b/, 'брандмауэр'],
+  [/(?:>\s*|\btee\s+(?:-a\s+)?|\bsed\s+-i\S*\s+(?:[^\n;|&]*\s)?|\bcp\s+[^\n;|&]*\s|\bmv\s+[^\n;|&]*\s|\bchmod\s+[^\n;|&]*\s|\bchown\s+[^\n;|&]*\s)\/etc\//, 'правка /etc'],
+  [/(?:^|[\s;&|(`$])(?:reboot|shutdown|poweroff|halt)\b/, 'перезагрузка'],
+];
+const RM_RE = /(?:^|[\s;&|(`$])rm\s+(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b([^\n;|&]*)/g;
+// A real request or agreement in the owner's own words.
+const SYS_OK_RE = /(разреша|разрешено|делай|сделай|исправь|почини|чини|удали|почисти|очисти|перезапус|перезагруз|обнови|поставь|установи|настрой|выключи|включи|закрой|sudo|(?<!\p{L})да(?!\p{L})|давай|можно|продолжай|доделай|го(?!\p{L}))/iu;
+
+// Paths an rm -rf may touch freely: /tmp, the project folder and relative paths inside it.
+function rmOutside(cmd, cwd) {
+  const bad = [];
+  for (const m of cmd.matchAll(RM_RE)) {
+    const args = m[2].trim().split(/\s+/).filter((a) => a && !a.startsWith('-'));
+    for (let a of args) {
+      a = a.replace(/^["']|["']$/g, '');
+      if (/^(\/tmp\/|\/private\/tmp\/|\/var\/folders\/)/.test(a)) continue;
+      if (cwd && (a === cwd || a.startsWith(`${cwd}/`))) continue;
+      if (!a.startsWith('/') && !a.startsWith('~') && !a.startsWith('$') && !a.includes('..') && a !== '*' && a !== '.') continue;
+      bad.push(a);
+    }
+  }
+  return bad;
+}
+
+export function systemRisks(cmd, cwd = '') {
+  const c = String(cmd || '');
+  const found = SYS_PATTERNS.filter(([re]) => re.test(c)).map(([, why]) => why);
+  const rm = rmOutside(c, cwd);
+  if (rm.length) found.push(`удаление вне проекта (${rm.slice(0, 3).join(', ')})`);
+  return found;
+}
+
+export function sysConsent({ prompt, origin }) {
+  if (origin === 'cron') return true;
+  if (!['bot', 'ui'].includes(origin)) return false;
+  const p = String(prompt || '').replace(/<mainframe-[a-z]+>[\s\S]*?<\/mainframe-[a-z]+>/g, '').replace(/<handoff>[\s\S]*?<\/handoff>/g, '');
+  return SYS_OK_RE.test(p) && !NEG_RE.test(p);
+}
+
+// state: the run's guard ({ origin, sysOk }); cwd: the project folder.
+export function systemHooks(state, cwd, onEvent = () => {}) {
+  return async (input) => {
+    if (input.tool_name !== 'Bash') return {};
+    const cmd = String(input.tool_input?.command || '');
+    const risks = systemRisks(cmd, cwd);
+    if (!risks.length || state.sysOk) return {};
+    const why = `Системная команда (${risks.join(', ')}) только по прямой просьбе владельца в его последнем сообщении. Спроси его и дождись ответа.`;
+    onEvent(`Заблокировано: ${cmd.slice(0, 160)}. ${why}`);
+    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } };
+  };
 }

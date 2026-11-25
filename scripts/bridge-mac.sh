@@ -122,19 +122,19 @@ PL
 }
 s() { printf '<string>%s</string>' "$@"; }
 FWD=(-R "127.0.0.1:$P_COMPUTER:127.0.0.1:$P_COMPUTER")
-agent computer "$(s "$SG" --stdio "$M/node_modules/.bin/computer-use-mcp" --outputTransport streamableHttp --stateful --port "$P_COMPUTER")"
+agent computer "$(s "$SG" --stdio "$M/node_modules/.bin/computer-use-mcp" --outputTransport streamableHttp --stateful --host 127.0.0.1 --sessionTimeout 600000 --port "$P_COMPUTER")"
 if [ "$FEAT_APPLE" = 1 ]; then
-  agent apple "$(s "$SG" --stdio "$APP/Contents/MacOS/macos-apps-mcp -E -s -P -m macos_apps_mcp shim" --outputTransport streamableHttp --stateful --port "$P_APPLE")"
+  agent apple "$(s "$SG" --stdio "$APP/Contents/MacOS/macos-apps-mcp -E -s -P -m macos_apps_mcp shim" --outputTransport streamableHttp --stateful --host 127.0.0.1 --sessionTimeout 600000 --port "$P_APPLE")"
   FWD+=(-R "127.0.0.1:$P_APPLE:127.0.0.1:$P_APPLE")
 fi
 if [ "$FEAT_CHROME" = 1 ]; then
   [ -z "${MF_CHROME_PORT:-}" ] && agent chrome "$(s "$CHROME" "--user-data-dir=$M/chrome-profile" "--remote-debugging-port=$P_DEBUG" --remote-debugging-address=127.0.0.1 --no-first-run --no-default-browser-check --restore-last-session --disable-background-timer-throttling --disable-renderer-backgrounding)"
-  agent browser "$(s "$SG" --stdio "$M/node_modules/.bin/chrome-devtools-mcp --browserUrl http://127.0.0.1:$P_DEBUG --usageStatistics false --performanceCrux false --screenshotFormat jpeg --screenshotMaxWidth 1280" --outputTransport streamableHttp --stateful --port "$P_CHROME")"
+  agent browser "$(s "$SG" --stdio "$M/node_modules/.bin/chrome-devtools-mcp --browserUrl http://127.0.0.1:$P_DEBUG --usageStatistics false --performanceCrux false --screenshotFormat jpeg --screenshotMaxWidth 1280" --outputTransport streamableHttp --stateful --host 127.0.0.1 --sessionTimeout 600000 --port "$P_CHROME")"
   FWD+=(-R "127.0.0.1:$P_CHROME:127.0.0.1:$P_CHROME")
 fi
 [ "$FEAT_WHISPER" = 1 ] && FWD+=(-R "127.0.0.1:$P_WHISPER:127.0.0.1:$P_WHISPER")
 [ "$FEAT_SSH" = 1 ] && FWD+=(-R "127.0.0.1:$P_SSH:127.0.0.1:22")
-agent tunnel "$(s /usr/bin/ssh -N -i "$KEY" -p "$S_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$KH" -o "StrictHostKeyChecking=$CHECK" -o ExitOnForwardFailure=yes -o ServerAliveInterval=20 -o ServerAliveCountMax=3 "${FWD[@]}" "$S_USER@$S_HOST")"
+agent tunnel "$(s /usr/bin/ssh -N -i "$KEY" -p "$S_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$KH" -o "StrictHostKeyChecking=$CHECK" -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ConnectTimeout=15 "${FWD[@]}" "$S_USER@$S_HOST")"
 
 sleep 6
 if launchctl print "gui/$(id -u)/$LABEL-tunnel" 2>/dev/null | grep -q "state = running"; then

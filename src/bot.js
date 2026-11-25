@@ -3,7 +3,7 @@ import * as widgets from './widgets.js';
 import { config } from './config.js';
 import { all, get, run, now, kvGet, kvSet, addLog } from './db.js';
 import { bus } from './bus.js';
-import { startRun, stopAll, resumeAll, stopRun, onRunFinished, addEvent, requestNewSession } from './agent.js';
+import { startRun, stopAll, resumeAll, stopRun, onRunFinished, onRunAnswered, addEvent, requestNewSession } from './agent.js';
 import { onInboxUpdate, forwardItem, replyItem, ignoreItem, getItem } from './dispatcher.js';
 import { fireTask, updateTask } from './scheduler.js';
 import { alertsDigest } from './alerts.js';
@@ -41,13 +41,18 @@ function remember(msg, { inboxId = null, projectId = null }) {
 
 // A network blip or a short flood wait should not lose a message: retry 3 times (2, 5, 15 s)
 // or after the wait Telegram asks for, up to 2 minutes.
+// One flood wait for the whole bot: when Telegram says «retry after N», every status edit stops
+// until then (the answers wait their turn), instead of each tracker hammering on its own.
+let floodUntil = 0;
+const noteFlood = (e) => { const ra = Number(e?.parameters?.retry_after || String(e?.message || "").match(/retry after (\d+)/)?.[1] || 0); if (ra) floodUntil = Math.max(floodUntil, Date.now() + ra * 1000); return ra; };
 async function withRetry(fn) {
   const waits = [2000, 5000, 15000];
   for (let i = 0; ; i++) {
+    if (floodUntil > Date.now()) await new Promise((r) => setTimeout(r, Math.min(floodUntil - Date.now() + 300, 180000)));
     try { return await fn(); } catch (e) {
-      const ra = Number(e.parameters?.retry_after || e.message.match(/retry after (\d+)/)?.[1] || 0);
+      const ra = noteFlood(e);
       const net = /Network request|ETIMEDOUT|ECONNRESET|EAI_AGAIN|fetch failed|socket hang up/i.test(e.message);
-      if (i >= waits.length || (!net && !ra) || ra > 120) throw e;
+      if (i >= waits.length || (!net && !ra) || ra > 180) throw e;
       await new Promise((r) => setTimeout(r, ra ? ra * 1000 + 500 : waits[i]));
     }
   }
@@ -124,7 +129,11 @@ const REACT_RE = /^\s*\[\[(?:реакция|react):\s*(.+?)\]\]\s*$/i;
 // (Telegram's message drafts made the iPhone app lift the chat and leave an empty area.)
 async function pushDraft(runId) {
   const t = live.get(runId);
-  if (!t || t.done || !t.msgId || Date.now() < (t.pauseUntil || 0)) return;
+  if (!t || t.done || !t.msgId || Date.now() < (t.pauseUntil || 0) || Date.now() < floodUntil) return;
+  // Long work does not need a fresh status every 3 s: 3 s for the first minute, then 10 s, after 5 minutes 30 s.
+  const age = Date.now() - (t.started || Date.now());
+  const gap = age < 60000 ? 3000 : age < 300000 ? 10000 : 30000;
+  if (Date.now() - (t.last || 0) < gap) return;
   const r = get('SELECT * FROM runs WHERE id = ?', runId);
   if (t.widget) {
     // The widget runs its own clock: edit it only when the step or the words change.
@@ -138,7 +147,7 @@ async function pushDraft(runId) {
     t.lastText = key; t.state = state;
     t.inflight = widgets.editProgress(Number(t.chatId), t.msgId, state).then(() => { t.last = Date.now(); }).catch((err) => {
       if (/not found|MESSAGE_ID_INVALID/i.test(err.message)) t.msgId = null;
-      const wait = Number(err.parameters?.retry_after || 0); if (wait) t.pauseUntil = Date.now() + wait * 1000;
+      const wait = noteFlood(err); if (wait) t.pauseUntil = Date.now() + wait * 1000;
     }).finally(() => { t.inflight = null; });
     return t.inflight;
   }
@@ -157,7 +166,7 @@ async function pushDraft(runId) {
       // The status message is gone (deleted or replaced): stop editing it instead of retrying every 3 s.
       if (/not found|can't be edited|MESSAGE_ID_INVALID/i.test(e.message)) { t.msgId = null; return; }
       // Telegram flood limit: wait as long as it asks, without piling more calls on top.
-      const wait = Number(e.parameters?.retry_after || e.message.match(/retry after (\d+)/)?.[1] || 0);
+      const wait = noteFlood(e);
       if (wait) { t.pauseUntil = Date.now() + wait * 1000; return; }
       addLog('error', `Статус работы: ${e.message.slice(0, 120)}`);
     })
@@ -166,7 +175,7 @@ async function pushDraft(runId) {
 }
 
 async function trackRun(runId, chatId, userMsgId, project) {
-  const t = { chatId, userMsgId, timer: null, last: 0, pending: null, msgId: null };
+  const t = { chatId, userMsgId, timer: null, last: 0, pending: null, msgId: null, started: Date.now() };
   live.set(runId, t);
   react(chatId, userMsgId, '👀');
   try {
@@ -617,16 +626,22 @@ export function startBot() {
   // Screenshots and files: saved on the Mac, the session gets their paths. An album arrives
   // as several messages, so they are collected for a moment and sent as one task.
   const albums = new Map();
-  bot.on(['message:photo', 'message:document'], async (ctx) => {
+  // Videos and GIFs used to be dropped silently: they are saved like files now.
+  bot.on(['message:photo', 'message:document', 'message:video', 'message:animation'], async (ctx) => {
     let file;
     try {
       const f = await ctx.getFile();
       const res = await fetch(`${(process.env.TELEGRAM_API_ROOT || 'https://api.telegram.org').replace(/\/$/, '')}/file/bot${config.botToken}/${f.file_path}`);
       if (!res.ok) throw new Error(`Telegram не отдал файл (${res.status})`);
-      const name = ctx.message.document?.file_name || f.file_path.split('/').pop();
+      const m = ctx.message;
+      const name = m.document?.file_name || m.video?.file_name || m.animation?.file_name || f.file_path.split('/').pop();
       file = saveUpload(name, Buffer.from(await res.arrayBuffer()));
     } catch (e) {
-      return ctx.reply(`⚠️ Не смог сохранить файл: ${esc(e.message)}`, HTML);
+      // The Bot API gives bots files up to 20 MB only.
+      const big = /too big/i.test(e.message || '');
+      return ctx.reply(big
+        ? '⚠️ Файл больше 20 МБ, бот Telegram такой не скачивает. Пришли покороче или сжатый, либо ссылкой (Google Диск, YouTube).'
+        : `⚠️ Не смог сохранить файл: ${esc(e.message)}`, big ? undefined : HTML);
     }
     const caption = ctx.message.caption || '';
     const group = ctx.message.media_group_id;
@@ -808,9 +823,41 @@ export function startBot() {
   });
   announcePending();
 
+  // Runs whose answer already went out; the finish only adds what the background work brought.
+  const answeredEarly = new Map();
+  const sendReports = async (chat, r, project) => {
+    const reports = all("SELECT content FROM run_events WHERE run_id = ? AND kind = 'bg_report' ORDER BY id", r.id).map((x) => x.content);
+    if (!reports.length) return;
+    const one = reports.map((x) => extractButtons(String(x)).text).filter(Boolean).join('\n\n---\n\n').slice(0, 30000);
+    if (one) await sendAnswer(chat, `🧩 **Фоновая работа** · ${project.name}\n\n${one}`, `🧩 <b>Фоновая работа</b> · ${esc(project.name)}\n\n${answer(one)}`).catch((e) => addLog('error', `Бот: отчёт фоновой работы: ${e.message.slice(0, 120)}`));
+  };
+
+  onRunAnswered(async (r, project) => {
+    if (r.origin !== 'bot' || r.inbox_id || !ownerId()) return;
+    const t = untrack(r.id);
+    answeredEarly.set(r.id, true);
+    if (t?.inflight) await t.inflight.catch(() => {});
+    if (t?.msgId) await bot.api.deleteMessage(Number(t.chatId), t.msgId).catch(() => {});
+    const chat = t?.chatId || ownerId();
+    const ack = t?.userMsgId && REACT_RE.exec(String(r.result || ''));
+    if (ack && (await react(chat, t.userMsgId, ack[1].trim()) || await react(chat, t.userMsgId, '👍'))) return;
+    if (t) react(chat, t.userMsgId, '✍');
+    const { text, md, kb } = resultMessage(r, project);
+    const msg = await sendAnswer(chat, md, text, kb.inline_keyboard.length ? { reply_markup: kb } : {});
+    remember(msg, { projectId: project.id });
+  });
+
   onRunFinished(async (r0, project) => {
     let r = r0;
     const t = untrack(r.id);
+    if (answeredEarly.has(r.id)) {
+      answeredEarly.delete(r.id);
+      if (!ownerId()) return;
+      await sendReports(ownerId(), r, project);
+      const warn = /\n\n(⚠️ [\s\S]*)$/.exec(String(r.result || ''))?.[1];
+      if (warn) await sendOwner(esc(warn)).catch(() => {});
+      return;
+    }
     if (t?.inflight) await t.inflight.catch(() => {});
     if (t?.msgId) await bot.api.deleteMessage(Number(t.chatId), t.msgId).catch(() => {});
     if (!ownerId() || r.inbox_id) return;
@@ -861,12 +908,8 @@ export function startBot() {
     const long = r.finished_at - r.started_at > 60000;
     const msg = await sendAnswer(chat, md, text, { ...(kb.inline_keyboard.length ? { reply_markup: kb } : {}), ...(r.status === 'done' && long ? { message_effect_id: EFFECT_DONE } : {}) });
     remember(msg, { projectId: project.id });
-    // Reports of background work (agents, subtasks) that came after the answer: their own quiet message.
-    const reports = all("SELECT content FROM run_events WHERE run_id = ? AND kind = 'bg_report' ORDER BY id", r.id).map((x) => x.content);
-    if (reports.length) {
-      const one = reports.map((x) => extractButtons(String(x)).text).filter(Boolean).join('\n\n---\n\n').slice(0, 30000);
-      if (one) await sendAnswer(chat, `🧩 **Фоновая работа** · ${project.name}\n\n${one}`, `🧩 <b>Фоновая работа</b> · ${esc(project.name)}\n\n${answer(one)}`, { disable_notification: true }).catch((e) => addLog('error', `Бот: отчёт фоновой работы: ${e.message.slice(0, 120)}`));
-    }
+    // Reports of background work (agents, subtasks) that came after the answer: their own message.
+    await sendReports(chat, r, project);
     if (digest === 'evening') await sendPendingCard().catch((e) => addLog('error', `Память, карточка: ${e.message.slice(0, 120)}`));
   });
 

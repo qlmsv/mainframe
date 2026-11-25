@@ -18,6 +18,11 @@ if [ -z "${ANTHROPIC_BASE_URL:-}" ]; then
 else
   cmd+=" unset CLAUDE_CODE_OAUTH_TOKEN; export ANTHROPIC_API_KEY=$(q "${ANTHROPIC_API_KEY:-}");"
 fi
+# Keys that mcp.json names as ${VAR} (Claude Code fills them in from its environment): read from the
+# Mac's own .env, so their values never travel on a command line.
+for k in $(grep -o '\${[A-Z][A-Z0-9_]*}' "${MCP_CONFIG:-$(dirname "$0")/../mcp.json}" 2>/dev/null | tr -d '${}' | sort -u); do
+  cmd+=" V=\$(grep '^$k=' $MAC_ENV_FILE | cut -d= -f2-); [ -n \"\$V\" ] && export $k=\$V;"
+done
 for k in $(compgen -e); do
   case $k in
     CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY) ;;
