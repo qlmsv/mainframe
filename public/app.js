@@ -1244,6 +1244,35 @@ function runCard(r) {
   </div>`;
 }
 
+
+// ---------- the owner's tasks on the home screen: dense, «done» in one tap ----------
+const TODO_COLS = [['today', '☀️ Сегодня'], ['week', '📆 На неделе'], ['waiting', '⏳ Ждёт ответа'], ['inbox', '📥 Входящие']];
+const todoDue = (t) => {
+  if (!t.due) return '';
+  const day = t.due.slice(0, 10);
+  const today = isoDay(new Date());
+  const label = day === today ? 'сегодня' : new Date(`${day}T12:00`).toLocaleDateString('ru', { day: 'numeric', month: 'short' });
+  return `<span class="td-due ${day < today ? 'late' : ''}">${esc(label)}</span>`;
+};
+function todosBlock(h) {
+  const items = h?.todos?.items || [];
+  const c = h?.todos?.counts || {};
+  const open = S.todoOpen || {};
+  const groups = TODO_COLS.map(([st, label]) => {
+    const rows = items.filter((t) => t.status === st);
+    if (!rows.length) return '';
+    const show = st === 'today' || open[st] ? rows : rows.slice(0, 3);
+    return `<div class="td-group"><div class="td-head">${label}<span class="faint">${rows.length}</span></div>
+      ${show.map((t) => `<div class="td-row"><button class="check" data-action="todo-done" data-id="${t.id}" aria-label="Готово"></button>
+        <span class="td-title">${esc(t.title)}</span>${todoDue(t)}${t.who === 'assistant' ? '<span class="td-who">помощник</span>' : ''}
+        ${st !== 'today' ? `<button class="td-today" data-action="todo-today" data-id="${t.id}" title="На сегодня">→ сегодня</button>` : ''}</div>`).join('')}
+      ${rows.length > show.length ? `<button class="td-more" data-action="todo-more" data-id="${st}">ещё ${rows.length - show.length}</button>` : ''}</div>`;
+  }).join('');
+  return `<section class="card raised td-card"><div class="sec-title">${icon('check')}Задачи${c.today ? ` <span class="badge accent">${c.today}</span>` : ''}${c.overdue ? ` <span class="badge warn">просрочено ${c.overdue}</span>` : ''}<span class="grow"></span>${c.done ? `<span class="faint">готово за неделю ${c.done}</span>` : ''}</div>
+    <form class="td-add" data-form="todo-add"><input class="input grow" name="title" placeholder="Новая задача" autocomplete="off" data-keep="td-new"><button class="btn small primary" aria-label="Добавить">${icon('plus')}</button></form>
+    ${groups || '<div class="faint">Задач нет. Напиши в бот «добавь задачу …» или сюда.</div>'}</section>`;
+}
+
 function viewHome() {
   const d = S.data;
   const h = d.home;
@@ -1274,7 +1303,7 @@ function viewHome() {
     ${evs.map((e) => `<div class="ev ${eventNow(e) ? 'now' : ''}"><span class="ev-time">${esc(e.time || 'весь день')}</span><span class="ev-title">${esc(e.title)}</span></div>`).join('')}
     ${rems.map((r) => `<div class="rem ${r.kind}"><button class="check" data-action="complete-reminder" data-id="${esc(r.id)}" aria-label="Выполнено"></button><span class="grow">${esc(r.title)}</span></div>`).join('')}</section>` : '';
   const modBlock = sums.length ? `<section class="mod-sums">${sums.map((x) => `<button class="mod-sum" ${x.nav ? `data-nav="${esc(x.nav)}"` : ''}><span class="ms-t">${esc(x.icon || '•')} ${esc(x.title)}</span><b class="ms-v">${esc(String(x.value ?? '·'))}</b>${x.note ? `<span class="ms-n">${esc(x.note)}</span>` : ''}</button>`).join('')}</section>` : '';
-  return `${top}${modBlock}${work}${waitBlock}${agendaBlock}`;
+  return `${top}${todosBlock(h)}${modBlock}${work}${waitBlock}${agendaBlock}`;
 }
 
 // ---------- sections with segments ----------
@@ -1864,6 +1893,13 @@ document.addEventListener('click', async (e) => {
     case 'past-all':
       if (p) { S.past[p.id] = { session: p.session_id, ...(await api(`/api/projects/${p.id}/past?limit=200`)) }; render(); }
       break;
+    case 'todo-done':
+      el.classList.add('done');
+      el.closest('.td-row')?.classList.add('gone');
+      await act(() => api(`/api/todos/${id}/done`, { method: 'POST' }), 'Готово ✅');
+      break;
+    case 'todo-today': await act(() => api(`/api/todos/${id}`, { method: 'POST', body: { status: 'today' } }), 'На сегодня ☀️'); break;
+    case 'todo-more': S.todoOpen = { ...(S.todoOpen || {}), [id]: true }; render(); break;
     case 'complete-reminder':
       el.classList.add('done');
       await act(() => api('/api/reminders/complete', { method: 'POST', body: { id } }), 'Выполнено');
@@ -1996,6 +2032,15 @@ document.addEventListener('submit', async (e) => {
 
 // Quick reminder from the Today view.
 document.addEventListener('submit', async (e) => {
+  if (e.target.dataset.form === 'todo-add') {
+    e.preventDefault();
+    const inp = e.target.elements.title;
+    const title = inp.value.trim();
+    if (!title) return;
+    inp.value = ''; delete inp.dataset.touched;
+    await act(() => api('/api/todos', { method: 'POST', body: { title } }), 'Записано');
+    return;
+  }
   if (e.target.dataset.form !== 'reminder') return;
   e.preventDefault();
   const f = e.target;

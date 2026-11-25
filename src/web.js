@@ -29,6 +29,7 @@ import { saveUpload } from './uploads.js';
 import { channelStats, socialState, refreshReport } from './social.js';
 import { agenda, upcomingReminders, completeReminder, createReminder, createEvent, notesList, noteBody, createNote } from './apple.js';
 
+import { addTodo, listTodos, updateTodo, doneTodo, deleteTodo, todoCounts } from './todos.js';
 import * as setup from './setup.js';
 import * as modes from './modes.js';
 import * as mailbox from './mailbox.js';
@@ -333,8 +334,15 @@ route('GET', '/api/home', async () => {
     running, asked, recent,
     pendingMemory: memory.listPending().map((n) => ({ name: n.name, title: n.title })),
     inboxOpen: get("SELECT COUNT(*) c FROM inbox WHERE status IN ('new','routed','error','done')").c,
+    todos: { counts: todoCounts(), items: listTodos({ limit: 60 }) },
   };
 });
+// The owner's tasks (src/todos.js): the same list the bot and the sessions keep.
+route('GET', '/api/todos', ({ url }) => ({ counts: todoCounts(), items: listTodos({ done: url.searchParams.get('done') === '1' }) }));
+route('POST', '/api/todos', ({ body }) => addTodo({ title: body.title, status: body.status || 'inbox', who: body.who, due: body.due || undefined, notes: body.notes, source: 'пульт' }));
+route('POST', '/api/todos/:id', ({ p, body }) => updateTodo(Number(p.id), body));
+route('POST', '/api/todos/:id/done', ({ p }) => doneTodo(Number(p.id)));
+route('DELETE', '/api/todos/:id', ({ p }) => deleteTodo(Number(p.id)));
 route('POST', '/api/finance', ({ body }) => {
   if (!(Number(body.amount) > 0)) throw new Error('Нужна сумма');
   return addExpense({ amount: Number(body.amount), currency: body.currency || config.currency, merchant: String(body.merchant || '').slice(0, 120), category: body.category || undefined, note: String(body.note || '').slice(0, 300), at: body.at ? Date.parse(body.at) : undefined, source: 'вручную' });
