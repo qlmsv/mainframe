@@ -14,6 +14,7 @@ import { serverBrowserMcp, bridgeOnline } from './modes.js';
 import { mailboxConfigured, mailServer } from './mailbox.js';
 import { googleMcp } from './google.js';
 import { metrikaReport, metrikaCounters } from './metrika.js';
+import { addTodo, listTodos, updateTodo, doneTodo, todoLine, todoCounts, TODO_STATUSES, STATUS_LABEL } from './todos.js';
 
 const handlers = {
   notify: async () => { throw new Error('Бот не настроен'); },
@@ -218,6 +219,23 @@ function mainframeServer(runId = null) {
       tool('work_log_update', 'Изменить запись реестра «что сделано» по номеру (из блока <mainframe-worklog>, [#N]).',
         { id: z.number().int(), status: z.enum(STATUSES).optional(), location: z.string().optional(), title: z.string().optional() },
         async ({ id, ...p }) => { const r = updateWork(id, p); return text(`№${r.id}: ${r.title} · ${r.status}`); }),
+      tool('todo_add', 'Записать задачу в список задач владельца (его единственный трекер: виден в боте /tasks, в виджете «Сегодня» и на главной пульта). Вызывай сам, без вопросов, когда владелец в чате называет дело на будущее («надо…», «не забыть…», «добавь задачу…», «завтра позвонить…») или ты взял на себя работу, которую не сделаешь в этом ответе. status: inbox (по умолчанию), today (сегодня), week (на неделе), waiting (ждём ответа от кого-то). who: owner (делает владелец) или assistant (делаешь ты). due: дата YYYY-MM-DD, «сегодня» или «завтра».',
+        { title: z.string().describe('коротко, глаголом: «Позвонить Ане про договор»'), notes: z.string().optional().describe('подробности, ссылки, кто ждёт'), status: z.enum(TODO_STATUSES).optional(), who: z.enum(['owner', 'assistant']).optional(), due: z.string().optional() },
+        async (a) => { const t = addTodo({ ...a, source: runId ? 'чат' : 'сессия' }); return text(`${t.added ? 'Записано' : 'Уже есть'}: ${todoLine(t)}`); }),
+      tool('todo_list', 'Список задач владельца: открытые по колонкам (Сегодня, На неделе, Ждёт ответа, Входящие), со сроками и кто делает. Смотри его, когда владелец спрашивает «что у меня на сегодня», «какие задачи», перед утренней сводкой и перед todo_done, чтобы найти номер.',
+        { status: z.enum(TODO_STATUSES).optional().describe('только одна колонка'), who: z.enum(['owner', 'assistant']).optional(), with_done: z.boolean().optional().describe('добавить сделанные за 7 дней') },
+        async ({ status, who, with_done }) => {
+          const rows = listTodos({ status, who, done: Boolean(with_done) });
+          const c = todoCounts();
+          const head = TODO_STATUSES.map((s) => `${STATUS_LABEL[s]}${s === 'done' ? ' за 7 дней' : ''}: ${c[s]}`).join(' · ');
+          return text(`${head}\n${rows.map(todoLine).join('\n') || 'Задач нет'}`);
+        }),
+      tool('todo_update', 'Изменить задачу владельца по номеру: перенести в колонку (status), поменять срок (due: YYYY-MM-DD, «сегодня», «завтра», пусто снимает срок), текст, подробности, кто делает.',
+        { id: z.number().int(), status: z.enum(TODO_STATUSES).optional(), due: z.string().optional(), title: z.string().optional(), notes: z.string().optional(), who: z.enum(['owner', 'assistant']).optional() },
+        async ({ id, ...p }) => text(`Обновлено: ${todoLine(updateTodo(id, p))}`)),
+      tool('todo_done', 'Закрыть задачу владельца (в «Готово»). Вызывай сам, как только задача сделана: ты её сделал в этой сессии или владелец написал, что сделал. Номер ищи через todo_list.',
+        { id: z.number().int() },
+        async ({ id }) => text(`Готово: ${todoLine(doneTodo(id))}`)),
       ...moduleTools({ tool, z, text }),
     ],
   });
