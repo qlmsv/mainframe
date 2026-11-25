@@ -13,6 +13,7 @@ import { transcribeAudio, voiceEnabled } from './voice.js';
 import { setMailApprover, decideSend } from './mailbox.js';
 import * as chatsetup from './chatsetup.js';
 import { quickFor } from './quickbuttons.js';
+import * as topics from './topics.js';
 import { addTodo, doneTodo, updateTodo, todoLine, STATUSES } from './todos.js';
 import { saveUpload, withAttachments } from './uploads.js';
 import { completeReminder } from './apple.js';
@@ -82,7 +83,9 @@ export async function sendOwner(html, extra = {}) {
   if (config.channel === 'max') { const { maxSendOwner } = await import('./max.js'); return maxSendOwner(html, extra); }
   const id = ownerId();
   if (!bot || !id) throw new Error('Бот не подключён или владелец не привязан');
-  return send(id, html, extra);
+  // extra.topic: inbox | summary | todos → that topic of the owner's group (src/topics.js), if there is one.
+  const { topic, ...rest } = extra;
+  return send((topic && topics.destFor(topic)) || id, html, rest);
 }
 
 async function edit(ctx, { text, kb }) {
@@ -148,7 +151,7 @@ async function pushDraft(runId) {
     const key = JSON.stringify(state);
     if (key === t.lastText) return;
     t.lastText = key; t.state = state;
-    t.inflight = widgets.editProgress(Number(t.chatId), t.msgId, state).then(() => { t.last = Date.now(); }).catch((err) => {
+    t.inflight = widgets.editProgress(t.chatId, t.msgId, state).then(() => { t.last = Date.now(); }).catch((err) => {
       if (/not found|MESSAGE_ID_INVALID/i.test(err.message)) t.msgId = null;
       const wait = noteFlood(err); if (wait) t.pauseUntil = Date.now() + wait * 1000;
     }).finally(() => { t.inflight = null; });
@@ -162,7 +165,7 @@ async function pushDraft(runId) {
   const text = progressText(p, r, events, steps, t.tick);
   if (text === t.lastText) return;
   t.lastText = text;
-  t.inflight = bot.api.editMessageText(Number(t.chatId), t.msgId, text, { parse_mode: 'HTML' })
+  t.inflight = bot.api.editMessageText(t.chatId, t.msgId, text, { parse_mode: 'HTML' })
     .then(() => { t.last = Date.now(); })
     .catch((e) => {
       if (/not modified/i.test(e.message)) return;
@@ -195,7 +198,7 @@ async function trackRun(runId, chatId, userMsgId, project) {
     }
   }
   // Некит's sticker under the status, by state (src/stickers.js); nothing without file_ids.
-  t.sticker = new LiveSticker(bot.api, Number(chatId));
+  t.sticker = new LiveSticker(bot.api, chatId);
   t.sticker.set('thinking');
   t.timer = setInterval(() => { pushDraft(runId); t.sticker.set(runFace(runId)); }, 3000);
 }
@@ -409,6 +412,8 @@ export function startBot() {
   }
   // TELEGRAM_API_ROOT: a relay to api.telegram.org (where Telegram is blocked) or a test stub.
   bot = new Bot(config.botToken, process.env.TELEGRAM_API_ROOT ? { client: { apiRoot: process.env.TELEGRAM_API_ROOT.replace(/\/$/, '') } } : undefined);
+  // «chatId#threadId» anywhere a chat id goes: the call lands in that topic of the owner's group.
+  bot.api.config.use(topics.topicTransformer);
   // A letter from a session leaves only after the owner's button (src/mailbox.js).
   setMailApprover(async (id, m) => {
     const kb = new InlineKeyboard().text('📤 Отправить', `ms:${id}:1`).text('Отмена', `ms:${id}:0`);
@@ -452,7 +457,7 @@ export function startBot() {
         if (!listMemory().length) {
           const p = currentProject();
           const runId = startRun({ projectId: p.id, prompt: ONBOARDING_PROMPT, origin: 'bot' });
-          await trackRun(runId, ctx.chat.id, null, p);
+          await trackRun(runId, chatKey(ctx), null, p);
           return;
         }
         return showScreen(ctx, 'home');
@@ -473,8 +478,9 @@ export function startBot() {
       return;
     }
     if (!ctx.from || String(ctx.from.id) !== String(ownerId())) return;
-    // Only the private chat with the owner: in a group, results would leak to other members.
-    if (ctx.chat && ctx.chat.type !== 'private') return;
+    // Only the private chat with the owner, or the owner's own group with topics (src/topics.js):
+    // in any other group, results would leak to other members.
+    if (ctx.chat && ctx.chat.type !== 'private' && !topics.isTopicGroup(ctx.chat.id)) return;
     // Messages sent while the Mac was asleep or restarting arrive late. A few minutes is
     // fine; an hour-old command is likely stale, so it is shown, not executed.
     const sent = ctx.message?.date;
@@ -500,7 +506,7 @@ export function startBot() {
         await sendMenu(ctx.chat.id, '⌨️ Меню внизу, задачи пиши прямо сюда.');
         const p = currentProject();
         const runId = startRun({ projectId: p.id, prompt: ONBOARDING_PROMPT, origin: 'bot' });
-        await trackRun(runId, ctx.chat.id, null, p);
+        await trackRun(runId, chatKey(ctx), null, p);
       }
     } catch (e) { await ctx.reply(`⚠️ ${esc(e.message)}`, HTML).catch(() => {}); }
   });
@@ -526,7 +532,7 @@ export function startBot() {
   bot.command('setup', async (ctx) => {
     const p = currentProject();
     const runId = startRun({ projectId: p.id, prompt: `${ONBOARDING_PROMPT}\nВ памяти уже есть заметки (mainframe memory_list): не спрашивай то, что там уже есть, уточни только пробелы.`, origin: 'bot' });
-    await trackRun(runId, ctx.chat.id, null, p);
+    await trackRun(runId, chatKey(ctx), null, p);
   });
   // Which model works now, and a switch between providers. Keys are never sent here: only in the
   // dashboard (System → Model) or .env, a key in a chat would stay in its history.
@@ -562,6 +568,15 @@ export function startBot() {
 
   // What a reply (swipe) to one of the bot's messages means: a reply to an inbox card goes
   // to that person, a reply to a session result continues that session.
+  // In the topics group a message works in its topic's project and is answered in that topic.
+  const threadOf = (ctx) => (ctx.msg?.is_topic_message ? ctx.msg.message_thread_id : 1);
+  const chatKey = (ctx) => (topics.isTopicGroup(ctx.chat?.id) ? topics.destOf(ctx.chat.id, threadOf(ctx)) : ctx.chat.id);
+  const projectFor = (ctx) => {
+    if (!topics.isTopicGroup(ctx.chat?.id)) return currentProject();
+    const id = topics.topicProject(ctx.chat.id, threadOf(ctx), null);
+    return (id && get('SELECT * FROM projects WHERE id = ?', id)) || currentProject();
+  };
+
   async function handleOwnerText(ctx, text, heard = '', { files = false } = {}) {
     const replyTo = ctx.message.reply_to_message?.message_id;
     const link = replyTo ? get('SELECT * FROM bot_msgs WHERE message_id = ?', replyTo) : null;
@@ -578,18 +593,24 @@ export function startBot() {
       kb.text(`🧠 Это задача: ${config.assistantName}`, `tk:${item.id}`).primary();
       return ctx.reply(`${heard}${service ? `Это сервисная рассылка (${esc(item.username || item.name)}), отвечать туда нельзя.` : `Отправить это ${esc(item.name)}${item.source === 'mail' ? ' письмом' : ''} или это задача мне?`}\n\n<blockquote>${esc(text.slice(0, 800))}</blockquote>`, { ...HTML, reply_markup: kb });
     }
-    const p = (link?.project_id && get('SELECT * FROM projects WHERE id = ?', link.project_id)) || currentProject();
+    const p = (link?.project_id && get('SELECT * FROM projects WHERE id = ?', link.project_id)) || projectFor(ctx);
     if (heard) await ctx.reply(heard, HTML);
     const runId = startRun({ projectId: p.id, prompt: text, origin: 'bot' });
-    await trackRun(runId, ctx.chat.id, ctx.message.message_id, p);
+    await trackRun(runId, chatKey(ctx), ctx.message.message_id, p);
     return null;
   }
 
   bot.on('message:text', async (ctx) => {
     // A quick button: its request goes on as if the owner typed it.
     const quick = quickFor(ctx.message.text);
+    // «эта тема для …» in the topics group: tie this topic to a project or a role.
+    const bind = topics.isTopicGroup(ctx.chat.id) && /^эта тема (?:для|про|под)\s+(.{2,60})$/i.exec(ctx.message.text.trim());
+    if (bind) {
+      const r = topics.bindByWords(ctx.chat.id, threadOf(ctx), bind[1], all('SELECT id, name FROM projects'));
+      return ctx.reply(r ? `📌 Эта тема теперь для «${esc(r.what)}».` : `Не нашёл проект «${esc(bind[1])}». Есть: ${esc(all('SELECT name FROM projects').map((x) => x.name).join(', '))}; или «входящие», «сводки», «задачи».`, HTML);
+    }
     if (quick?.action === 'new') {
-      const p = currentProject();
+      const p = projectFor(ctx);
       const ok = requestNewSession(p.id);
       return ctx.reply(ok ? `🆕 Следующее сообщение начнёт новую сессию в «${esc(p.name)}».` : `Сессия в «${esc(p.name)}» и так новая.`, HTML);
     }
@@ -728,7 +749,7 @@ export function startBot() {
         run('UPDATE inbox SET draft = NULL WHERE id = ?', item.id);
         const runId = startRun({ projectId: p.id, prompt, origin: 'bot' });
         await ctx.editMessageReplyMarkup().catch(() => {});
-        await trackRun(runId, ctx.chat.id, ctx.callbackQuery.message?.message_id, p);
+        await trackRun(runId, chatKey(ctx), ctx.callbackQuery.message?.message_id, p);
         toast = `Задача ушла в «${p.name}»`;
       } else if (kind === 'r') {
         const it = getItem(Number(a));
@@ -798,7 +819,7 @@ export function startBot() {
         await ctx.editMessageReplyMarkup().catch(() => {});
         const p = get('SELECT * FROM projects WHERE id = ?', v.projectId) || currentProject();
         const runId = startRun({ projectId: p.id, prompt: v.text, origin: 'bot' });
-        await trackRun(runId, ctx.chat.id, null, p);
+        await trackRun(runId, chatKey(ctx), null, p);
         toast = `Ответ: ${v.text}`.slice(0, 190);
       } else if (kind === 'mem' && (a === 'y' || a === 'n')) {
         const v = untok(b) || {};
@@ -849,13 +870,13 @@ export function startBot() {
     if (reason === 'noted') {
       const d = item.decision ? JSON.parse(item.decision) : {};
       if (d.finance) return;
-      const msg = await sendOwner(`<i>· ${item.source === 'mail' ? '✉️' : '💬'} ${esc(item.name)}: ${esc(cut(item.text, 140))}${d.summary ? ' · без действий' : ''}</i>`, { disable_notification: true });
+      const msg = await sendOwner(`<i>· ${item.source === 'mail' ? '✉️' : '💬'} ${esc(item.name)}: ${esc(cut(item.text, 140))}${d.summary ? ' · без действий' : ''}</i>`, { disable_notification: true, topic: 'inbox' });
       return remember(msg, { inboxId: item.id });
     }
     const { text, kb } = inboxCard(item, reason);
     // Urgent rings; "can wait" and batches arrive silently.
     const quiet = item.urgency === 'подождёт' || (reason === 'batch' && item.urgency !== 'срочно');
-    const msg = await sendOwner(text, { ...(kb.inline_keyboard.length ? { reply_markup: kb } : {}), ...(quiet ? { disable_notification: true } : {}) });
+    const msg = await sendOwner(text, { ...(kb.inline_keyboard.length ? { reply_markup: kb } : {}), ...(quiet ? { disable_notification: true } : {}), topic: 'inbox' });
     remember(msg, { inboxId: item.id });
   });
 
@@ -865,6 +886,9 @@ export function startBot() {
     if (e.type === 'memory_overflow') sendOwner(`🧠 <b>Память переполнена.</b> Правила и люди больше ${Number(e.max).toLocaleString("ru")} символов, эти заметки идут в сессии только заголовком: ${esc(e.titles.join(', '))}.\nНапиши «сожми память», и я объединю похожие заметки.`).catch(() => {});
   });
   announcePending();
+
+  // Where a run's result goes when nobody waits for it in a chat: its topic in the group, else the private chat.
+  const runDest = (r, project) => topics.destFor('run', { projectId: project?.id, taskName: /^\[Задача по расписанию «(.+?)»\]/.exec(r.prompt || '')?.[1] || '', text: r.prompt || '' }) || ownerId();
 
   // Runs whose answer already went out; the finish only adds what the background work brought.
   const answeredEarly = new Map();
@@ -881,7 +905,7 @@ export function startBot() {
     const t = untrack(r.id);
     answeredEarly.set(r.id, true);
     if (t?.inflight) await t.inflight.catch(() => {});
-    if (t?.msgId) await bot.api.deleteMessage(Number(t.chatId), t.msgId).catch(() => {});
+    if (t?.msgId) await bot.api.deleteMessage(t.chatId, t.msgId).catch(() => {});
     const chat = t?.chatId || ownerId();
     const ack = t?.userMsgId && REACT_RE.exec(String(r.result || ''));
     if (ack && (await react(chat, t.userMsgId, ack[1].trim()) || await react(chat, t.userMsgId, '👍'))) return;
@@ -897,13 +921,13 @@ export function startBot() {
     if (answeredEarly.has(r.id)) {
       answeredEarly.delete(r.id);
       if (!ownerId()) return;
-      await sendReports(ownerId(), r, project);
+      await sendReports(runDest(r, project), r, project);
       const warn = /\n\n(⚠️ [\s\S]*)$/.exec(String(r.result || ''))?.[1];
       if (warn) await sendOwner(esc(warn)).catch(() => {});
       return;
     }
     if (t?.inflight) await t.inflight.catch(() => {});
-    if (t?.msgId) await bot.api.deleteMessage(Number(t.chatId), t.msgId).catch(() => {});
+    if (t?.msgId) await bot.api.deleteMessage(t.chatId, t.msgId).catch(() => {});
     if (!ownerId() || r.inbox_id) return;
     // Messages a background run kept back (notify_owner without urgent): they end in this one message.
     const held = BACKGROUND.has(r.origin) ? all("SELECT content FROM run_events WHERE run_id = ? AND kind = 'notify' ORDER BY id", r.id).map((x) => x.content) : [];
@@ -914,7 +938,7 @@ export function startBot() {
       return;
     }
     if (held.length && !String(r.result || '').trim()) r = { ...r, result: held[held.length - 1] };
-    const chat = t?.chatId || ownerId();
+    const chat = t?.chatId || runDest(r, project);
     const ack = r.status === 'done' && t?.userMsgId && REACT_RE.exec(String(r.result || ''));
     if (ack) {
       // Telegram allows only some emoji as reactions: an unsupported one falls back to 👍.
@@ -962,16 +986,18 @@ export function startBot() {
 
   setMainframeHandlers({ refreshMenu: (note) => (ownerId() ? sendMenu(ownerId(), note) : null) });
   setMainframeHandlers({ notify: async (md, { runId = null, urgent = false } = {}) => {
-    const r = runId ? get('SELECT origin, status FROM runs WHERE id = ?', runId) : null;
+    const r = runId ? get('SELECT id, origin, status, prompt, project_id FROM runs WHERE id = ?', runId) : null;
     if (r && BACKGROUND.has(r.origin) && !urgent && ['running', 'queued'].includes(r.status)) {
       addEvent(runId, 'notify', String(md).slice(0, 4000));
       return 'held';
     }
     const { text, choices, copies } = extractButtons(String(md));
     const kb = new InlineKeyboard();
-    choices.forEach((c, i) => { kb.text(c.slice(0, 40), `ask:${tok({ text: c, projectId: currentProject().id })}`); if (i % 2 === 1) kb.row(); });
+    choices.forEach((c, i) => { kb.text(c.slice(0, 40), `ask:${tok({ text: c, projectId: r?.project_id || currentProject().id })}`); if (i % 2 === 1) kb.row(); });
     for (const c of copies) kb.copyText(`📋 ${c.label.slice(0, 30)}`, c.text.slice(0, 256)).row();
-    return sendAnswer(ownerId(), `🔔 ${text}`, `🔔 ${body(text)}`, kb.inline_keyboard.length ? { reply_markup: kb } : {});
+    // The chat the run talks in (a topic of the group), else the topic of its project, else the private chat.
+    const dest = (r && live.get(r.id)?.chatId) || (r ? runDest(r, { id: r.project_id }) : ownerId());
+    return sendAnswer(dest, `🔔 ${text}`, `🔔 ${body(text)}`, kb.inline_keyboard.length ? { reply_markup: kb } : {});
   } });
 
   bot.api.setMyCommands([
