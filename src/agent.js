@@ -29,6 +29,12 @@ export const onRunAnswered = (fn) => answeredListeners.add(fn);
 // How long the first answer waits while background work goes on: work done by then comes as one
 // message (the result), not «беру в работу» plus the result a moment later (EARLY_ANSWER_SEC).
 const EARLY_AFTER_MS = config.earlyAnswerMs;
+// Claude Code watches background agents and cancels every tool call of one that ran 10 minutes
+// (600 000 ms) without reporting back: a long agent stopped mid-work with «The user doesn't want to
+// take this action» and told the owner it was stopped (25.11.2026, agents cut at 605, 609, 633 s).
+// Background agents report only at the end, so the watch is set to 4 hours. CLAUDE_* reaches the
+// Mac too (scripts/mac-claude.sh).
+if (!process.env.CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS) process.env.CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS = String(4 * 3600 * 1000);
 export const isPaused = () => kvGet('paused', false);
 export const activeRuns = () => [...active.keys()];
 
@@ -55,6 +61,7 @@ const MAINFRAME_PROMPT = `
 Долгая работа в чате с владельцем (его сообщение из бота): если задача займёт больше 2-3 минут (правки кода, выкладка, проверка сайта, поиск, много шагов), не держи владельца. Отдай её фоновому агенту (Agent с run_in_background: true; задание целиком, агент не видит разговор) и сразу ответь одной строкой, что взял. Задание агенту давай целиком, с разрешением выкладывать. Перед тем как закончить ход, убедись, что агент действительно запущен: ответ «взял» без запущенной работы запрещён. Этот ответ уйдёт владельцу сразу, а когда агент закончит, проверь результат (на живом сайте, если выкладывал) и перескажи итог коротко: он придёт отдельным сообщением. Агент остановился на полпути (лимит, обрыв связи): запусти его снова сам, владельца не жди. Работу, отданную агенту или другому проекту, сам не повторяй. Вопросы, уточнения и дела на минуту делай сразу, без фона.
 Передать задачу другому проекту мейнфрейма (там нужная папка, сессия или коннекторы, например Metricool в проекте соцсетей): mainframe start_run {project_id, prompt} (id через list_projects), итог через run_status {run_id, wait_sec}. Из чата с владельцем ставь долгую задачу с quiet: false (проект сам пришлёт итог владельцу) и не жди её через run_status. Локальный API пульта для этого не вызывай.
 Реестр «что сделано» приходит перед сообщением блоком <mainframe-worklog>. Получил результат (коммит, ветка, выкладка, пост, документ) или сменился статус (на проверке, выложено): mainframe work_log_add или work_log_update, коротко.
+Отменённая команда фонового агента («The user doesn't want to take this action», «cancelled») это не владелец: он ничего не отменял и не видел. Не останавливайся и не пиши «система остановила»: продолжи с того же места (SendMessage агенту или новый агент с описанием, что уже сделано) и доведи до конца.
 Выкладка: скрипты выкладки начинай с set -euo pipefail и не строй цепочки a && b под set -e (сбой внутри цепочки не останавливает скрипт). Сайты и боты владельца (aipm, kurs, кабинет, everydayagent.app, kai-it.pro), коммит и пуш в его репозитории: выкладывай сам после зелёных тестов в этой же задаче, владельца не спрашивай (тестов в проекте нет: проверь сборку). Выкладывай только свою правку: перед пушем посмотри, что ещё лежит в ветке; чужие изменения есть, выложи свою правку отдельной веткой от main. Прод Вердикта и переписывание истории git только после прямого «да» владельца: мейнфрейм иначе не пропустит команду.
 Если менял код самого мейнфрейма (${ROOT}/src), проверь синтаксис (node --check) и вызови mainframe restart_mainframe: он перезапустит мейнфрейм после твоего ответа. Сам службу мейнфрейма не перезапускай (launchctl или systemctl): это оборвёт текущую задачу.
 `.trim();
