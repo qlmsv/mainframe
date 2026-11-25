@@ -24,26 +24,53 @@ body{margin:0;font:14px/1.35 -apple-system,system-ui,sans-serif;color:var(--t)}
 .fade{animation:f .4s ease both}@keyframes f{from{opacity:0;transform:translateY(4px)}}`;
 
 
-// The assistant's face (the Vega star of public/spark.js), for widgets: plain SVG, state by class.
+// The assistant's face (the Некит cat of public/spark.js), for widgets: plain SVG, state by class.
 const SPARK_CSS = `.spk{flex:none;overflow:visible}.spk *{transform-box:fill-box;transform-origin:center}
-.spk .bz,.spk .ob{transform-box:view-box;transform-origin:50px 50px}.spk .bz{animation:sb 3.4s ease-in-out infinite}@keyframes sb{50%{transform:scale(.94)}}
-.spk .gl{animation:sg 3.4s ease-in-out infinite}@keyframes sg{50%{opacity:.55;transform:scale(1.08)}}
+.spk .all,.spk .hpos{transform-box:view-box;transform-origin:0 0}.spk .hpos{transform:translate(50px,44px) scale(.84) translate(-50px,-50px)}
+.spk[data-xs] .bodyg,.spk[data-xs] .dt,.spk[data-xs] .fd{display:none}.spk[data-xs] .hpos{transform:translate(50px,54px) scale(1.12) translate(-50px,-50px)}
+.spk .gl{animation:sg 3.4s ease-in-out infinite}@keyframes sg{50%{opacity:.55;transform:scale(1.06)}}
+.spk .torso{animation:sb 3.4s ease-in-out infinite}@keyframes sb{50%{transform:scale(1.04,.97)}}
+.spk .tail{transform-origin:10% 80%;animation:sy 3s ease-in-out infinite}@keyframes sy{50%{transform:rotate(-14deg)}}
+.spk .ear.el{transform-origin:85% 90%}.spk .ear.er{transform-origin:15% 90%}.spk .eh,.spk .ee{opacity:0}.spk .blush{opacity:.4}
+.spk .eo{animation:sk 4s linear infinite}@keyframes sk{0%,90%,96%,100%{transform:scaleY(1)}93%{transform:scaleY(.12)}}
 .spk .fx{opacity:0;transition:opacity .3s}
-.spk.thinking .ft,.spk.working .fw,.spk.done .fd,.spk.waiting .fr,.spk.error .fe{opacity:1}
-.spk .ft circle{animation:sd 1.1s infinite}.spk .ft circle:nth-child(2){animation-delay:.15s}.spk .ft circle:nth-child(3){animation-delay:.3s}@keyframes sd{50%{transform:translateY(-3px);opacity:.35}}
-.spk.thinking .bz{animation:st 2.4s ease-in-out infinite}@keyframes st{50%{transform:rotate(45deg) scale(.9)}100%{transform:rotate(90deg)}}
-.spk .ob{animation:so 2.2s linear infinite}@keyframes so{to{transform:rotate(360deg)}}
-.spk.working .bz{animation:sw 1s linear infinite}@keyframes sw{50%{transform:rotate(45deg) scale(1.08)}100%{transform:rotate(90deg)}}
-.spk.done .bz{animation:sp 1.2s cubic-bezier(.3,.7,.3,1) 2}@keyframes sp{20%{transform:scale(.82)}42%{transform:scale(1.16)}}
-.spk.error .cr{filter:saturate(.3) brightness(.85)}.spk.error .bz{transform:rotate(-10deg) scale(.86);animation:none}
-.spk .rg{animation:sr 1.6s ease-out infinite}@keyframes sr{0%{transform:scale(.5);opacity:.8}100%{transform:scale(1.35);opacity:0}}`;
-const SPARK = (size, id = 'spk') => `<svg id="${id}" class="spk" width="${size}" height="${size}" viewBox="0 0 100 100"><defs><radialGradient id="${id}b"><stop offset="0" stop-color="#e2602b" stop-opacity=".55"/><stop offset=".5" stop-color="#e2602b" stop-opacity=".16"/><stop offset="1" stop-color="#e2602b" stop-opacity="0"/></radialGradient><radialGradient id="${id}a"><stop offset="0" stop-color="#fff"/><stop offset=".35" stop-color="#fff1e6"/><stop offset="1" stop-color="#f08a55"/></radialGradient></defs>
-<circle class="gl" cx="50" cy="50" r="46" fill="url(#${id}b)"/><circle class="fx fr rg" cx="50" cy="50" r="34" fill="none" stroke="#e2602b" stroke-width="3"/>
-<g class="bz"><path d="M50 25 52.8 47.2 75 50 52.8 52.8 50 75 47.2 52.8 25 50 47.2 47.2z" fill="#f6a77c" opacity=".6" transform="rotate(45 50 50)"/><path class="cr" d="M50 10C52 38 55 45 90 50C55 55 52 62 50 90C48 62 45 55 10 50C45 45 48 38 50 10z" fill="url(#${id}a)"/><circle cx="50" cy="50" r="7" fill="#fff"/></g>
-<g class="fx ft" fill="#f6a77c"><circle cx="72" cy="14" r="3.6"/><circle cx="81" cy="14" r="3.6"/><circle cx="90" cy="14" r="3.6"/></g>
-<g class="fx fw"><g class="ob"><circle cx="50" cy="3" r="4" fill="#ffb020"/><circle cx="93" cy="62" r="3.4" fill="#21a366"/><circle cx="9" cy="72" r="3" fill="#e2602b"/></g></g>
-<g class="fx fd"><path d="M10 12l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="#ffb020"/><path d="M88 8l1.6 4 4 1.6-4 1.6-1.6 4-1.6-4-4-1.6 4-1.6z" fill="#21a366"/></g>
-<text class="fx fe" x="74" y="22" font-family="system-ui" font-weight="800" font-size="22" fill="#e5484d">?</text></svg>`;
+.spk.thinking .ft,.spk.working .fw,.spk.done .fd,.spk.error .fe{opacity:1}
+.spk .dt circle{animation:sd 1.1s infinite}.spk .dt circle:nth-child(2){animation-delay:.15s}.spk .dt circle:nth-child(3){animation-delay:.3s}@keyframes sd{50%{transform:translateY(-3px);opacity:.35}}
+.spk.thinking .look{transform:translate(2px,-3px)}.spk.thinking .head{transform:rotate(-6deg)}.spk.thinking .pr{opacity:0}
+.spk.working .look{transform:translateY(2.5px)}.spk.working .pl{animation:sw .36s ease-in-out infinite}.spk.working .pr{animation:sw .36s ease-in-out -.18s infinite}@keyframes sw{50%{transform:translateY(-4px)}}
+.spk.done .eo{opacity:0}.spk.done .eh{opacity:1}.spk.done .all{animation:sp 1s cubic-bezier(.3,.7,.3,1) 2}@keyframes sp{35%{transform:translateY(-7px)}}.spk.done .tail{animation-duration:.5s}
+.spk.error .ear.el{transform:rotate(-42deg)}.spk.error .ear.er{transform:rotate(42deg)}.spk.error .eo{opacity:0}.spk.error .ee{opacity:1}.spk.error .blush{opacity:.85}.spk.error .tail{animation:none;transform:rotate(30deg)}
+.spk.waiting .head{transform:rotate(8deg)}.spk.waiting .eo{animation:sl 3s ease-in-out infinite}@keyframes sl{0%,60%,100%{transform:scaleY(1)}70%,78%{transform:scaleY(.12)}}`;
+const SPARK = (size, id = 'spk') => `<svg id="${id}" class="spk"${size < 34 ? ' data-xs' : ''} width="${size}" height="${size}" viewBox="0 0 100 100"><defs><radialGradient id="${id}b"><stop offset="0" stop-color="#e2602b" stop-opacity=".5"/><stop offset=".55" stop-color="#e2602b" stop-opacity=".14"/><stop offset="1" stop-color="#e2602b" stop-opacity="0"/></radialGradient><radialGradient id="${id}a" cx="38%" cy="30%" r="80%"><stop offset="0" stop-color="#ffc79c"/><stop offset=".55" stop-color="#f39256"/><stop offset="1" stop-color="#d9602a"/></radialGradient></defs>
+<circle class="gl" cx="50" cy="52" r="46" fill="url(#${id}b)"/>
+<g class="all">
+<g class="bodyg">
+<path class="tail" d="M64 90C80 95 90 86 87 72C86 67 82 65 80 67" fill="none" stroke="url(#${id}a)" stroke-width="7" stroke-linecap="round"/>
+<ellipse class="torso" cx="50" cy="83" rx="20" ry="14" fill="url(#${id}a)"/>
+<ellipse cx="50" cy="87" rx="10" ry="8.5" fill="#fff1e6"/>
+<g class="fx fw"><rect x="27" y="92" width="46" height="7" rx="2.5" fill="#3a3d44"/><path d="M32 95.5h4M39 95.5h4M46 95.5h8M57 95.5h4M64 95.5h4" stroke="#6b6f78" stroke-width="1.6" stroke-linecap="round"/></g>
+<ellipse class="paw pl" cx="41" cy="94" rx="6" ry="4.2" fill="#ffe0c8"/>
+<ellipse class="paw pr" cx="59" cy="94" rx="6" ry="4.2" fill="#ffe0c8"/>
+</g>
+<g class="hpos"><g class="head">
+<g class="ear el"><path d="M21 44Q18 22 24 12Q27 9 31 12L47 27Z" fill="url(#${id}a)"/><path d="M27 35Q26 24 28 18L39 28Z" fill="#ffb4a2"/></g>
+<g class="ear er"><path d="M79 44Q82 22 76 12Q73 9 69 12L53 27Z" fill="url(#${id}a)"/><path d="M73 35Q74 24 72 18L61 28Z" fill="#ffb4a2"/></g>
+<ellipse class="face" cx="50" cy="52" rx="32" ry="27" fill="url(#${id}a)"/>
+<path d="M50 26v7M43 27l1.6 5.6M57 27l-1.6 5.6" stroke="#c4541f" stroke-width="2.6" stroke-linecap="round"/>
+<ellipse cx="50" cy="65" rx="12.5" ry="8.5" fill="#fff1e6"/>
+<g class="blush"><ellipse cx="31" cy="62" rx="4.5" ry="2.6" fill="#ff6f6f"/><ellipse cx="69" cy="62" rx="4.5" ry="2.6" fill="#ff6f6f"/></g>
+<g class="eyes eo"><g class="look"><ellipse cx="38.5" cy="52" rx="5" ry="6.4" fill="#1b1410"/><ellipse cx="61.5" cy="52" rx="5" ry="6.4" fill="#1b1410"/><circle cx="40.3" cy="49.6" r="1.9" fill="#fff"/><circle cx="63.3" cy="49.6" r="1.9" fill="#fff"/></g></g>
+<path class="eyes eh" d="M33 54Q38.5 46 44 54M56 54Q61.5 46 67 54" fill="none" stroke="#1b1410" stroke-width="3.2" stroke-linecap="round"/>
+<path class="eyes ee" d="M33.5 53Q38.5 57 43.5 53M56.5 53Q61.5 57 66.5 53" fill="none" stroke="#1b1410" stroke-width="3" stroke-linecap="round"/>
+<path d="M46.6 60.5h6.8q.6 0 .2.6l-3 3.2q-.6.6-1.2 0l-3-3.2q-.4-.6.2-.6z" fill="#ff7d86"/>
+<path class="mouth" d="M44.5 66q2.7 3 5.5.2q2.8 2.8 5.5-.2" stroke="#1b1410" stroke-width="1.8" stroke-linecap="round" fill="none"/>
+<path d="M28 60 13 57M28 65 13 66M72 60 87 57M72 65 87 66" stroke="#fff1e6" stroke-width="1.6" stroke-linecap="round" opacity=".85"/>
+<path class="fx fe" d="M80 30q-4 6 0 8q4-2 0-8z" fill="#8fd3ff"/>
+</g></g>
+<ellipse class="fx ft" cx="62" cy="73" rx="6" ry="4.6" fill="#ffe0c8"/>
+</g>
+<g class="fx ft dt" fill="#f6a77c"><circle cx="76" cy="12" r="3.2"/><circle cx="85" cy="12" r="3.2"/><circle cx="94" cy="12" r="3.2"/></g>
+<g class="fx fd"><path class="s" d="M10 14 l2.2 5.5 5.5 2.2 -5.5 2.2 -2.2 5.5 -2.2 -5.5 -5.5 -2.2 5.5 -2.2z" fill="#ffb020"/><path class="s" d="M90 10 l1.8 4.5 4.5 1.8 -4.5 1.8 -1.8 4.5 -1.8 -4.5 -4.5 -1.8 4.5 -1.8z" fill="#1f9d55"/><path class="s" d="M92 78 l1.5 3.8 3.8 1.5 -3.8 1.5 -1.5 3.8 -1.5 -3.8 -3.8 -1.5 3.8 -1.5z" fill="#f6a77c"/></g></svg>`;
 
 // Live data: render(d) draws; on open and every `every` seconds the widget asks the bot for kind.
 export const page = (body, render, kind, every) => `<!doctype html><html><head><style>${CSS}${SPARK_CSS}</style></head><body><div class="w" id="w">${body}</div><script>
