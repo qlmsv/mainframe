@@ -4,6 +4,7 @@
 // answered by answerWidgetQuery (≤1024 bytes). Every widget also gets a text caption for old apps.
 import net from 'node:net';
 import { LOCAL_OFFSET, config } from './config.js';
+import { topTodos, listTodos } from './todos.js';
 import { all, get, kvGet, kvSet, addLog } from './db.js';
 import { financeSummary, rates } from './finance.js';
 import { agenda } from './apple.js';
@@ -189,6 +190,9 @@ export async function todayData() {
     ev = evs.slice(0, 4).map((e) => [e.time || 'весь день', cut(e.title, 30)]);
     rm = a.reminders.slice(0, 4).map((r) => cut(r.title, 34));
   } catch { /* the Mac is off: no calendar */ }
+  // «Дела»: the owner's tasks for today (src/todos.js) first, then reminders from the Mac.
+  const td = topTodos(6);
+  rm = [...td.map((t) => cut(t.title, 34)), ...rm].slice(0, 6);
   const wi = get("SELECT COUNT(*) n FROM inbox WHERE status IN ('new','routed')").n;
   const wn = waitingRows().slice(0, 3).map((r) => cut(r.name || r.username || 'кто-то', 18) + ': ' + cut(String(r.text || '').replace(/\s+/g, ' '), 26));
   const x = modules.map((m) => { try { return m.dayLine?.() || null; } catch { return null; } }).filter(Boolean).map((t) => cut(t, 60));
@@ -229,7 +233,9 @@ function spin(){const t=D.t||[];if(!t.length)return;const n=t.length,s=360/n;con
 requestAnimationFrame(()=>{document.getElementById('wh').style.transform='rotate('+A+'deg)'});setTimeout(()=>{P=k;draw();W.HapticFeedback&&W.HapticFeedback.notificationOccurred('success')},3100)}`, 'spin', 600);
 
 export async function spinData() {
-  const t = [];
+  // Today's tasks first, then the rest of the open ones, reminders, people waiting for an answer.
+  const t = topTodos(8).map((x) => cut(x.title, 26));
+  for (const x of listTodos()) if (t.length < 6 && x.status !== 'waiting' && !t.includes(cut(x.title, 26))) t.push(cut(x.title, 26));
   try { (await agenda()).reminders.slice(0, 6).forEach((r) => t.push(cut(r.title, 26))); } catch { /* no Mac */ }
   for (const r of waitingRows()) if (t.length < 8) t.push(cut(`Ответить: ${r.name || r.username || 'кто-то'}`, 26));
   return fit({ t: t.slice(0, 8) });

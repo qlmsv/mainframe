@@ -2,6 +2,7 @@
 // buttons, copy buttons. Screens are edited in place; the reply keyboard opens them.
 import { InlineKeyboard, Keyboard } from 'grammy';
 import { quickButtons } from './quickbuttons.js';
+import { listTodos, todoCounts, todoLine, STATUSES } from './todos.js';
 import { config } from './config.js';
 import { all, get, run, db, kvGet, defaultProject } from './db.js';
 import { activeRuns, isPaused } from './agent.js';
@@ -88,7 +89,7 @@ export function tok(value) {
 export const untok = (key) => { const r = get('SELECT value FROM bot_tokens WHERE key = ?', key); return r ? JSON.parse(r.value) : undefined; };
 
 // ---------- reply keyboard (main menu) ----------
-export const MENU = { home: '🏠 Пульт', inbox: '📥 Входящие', today: '📅 Сегодня', sessions: '🧠 Сессии', social: '📊 Соцсети', more: '⚙️ Ещё' };
+export const MENU = { home: '🏠 Пульт', todos: '📋 Задачи', inbox: '📥 Входящие', today: '📅 Сегодня', sessions: '🧠 Сессии', social: '📊 Соцсети', more: '⚙️ Ещё' };
 export const menuFor = (text) => Object.entries(MENU).find(([, v]) => v === text)?.[0] || null;
 
 // Quick requests 2 in a row (src/quickbuttons.js), then the screens: Пульт, Входящие, Ещё
@@ -98,7 +99,7 @@ export function mainKeyboard(project) {
   quickButtons().forEach((b, i) => { kb.text(b.label); if (i % 2 === 1) kb.row(); });
   if (quickButtons().length % 2 === 1) kb.row();
   return kb
-    .text(MENU.home).text(MENU.inbox).text(MENU.more)
+    .text(MENU.home).text(MENU.todos).text(MENU.inbox).text(MENU.more)
     // Not persistent: on a phone two rows of buttons took a third of the screen. The ▦ button
     // in the input field opens it, and it hides again after a tap.
     .resized().oneTime()
@@ -135,7 +136,7 @@ export function homeScreen() {
   const kb = new InlineKeyboard()
     .text(`📥 Входящие${waiting ? ` · ${waiting}` : ''}`, 'n:inbox').primary().text('☀️ Сегодня', 'wo:today').row()
     .text('🧠 Сессии', 'n:sess').text('📊 Соцсети', 'n:soc').row()
-    .text('⏰ Задачи', 'n:tasks').text('⚙️ Система', 'n:sys');
+    .text(`📋 Задачи${todoCounts().today ? ` · ${todoCounts().today}` : ''}`, 'n:tasks').text('⚙️ Система', 'n:sys');
   // Widgets, two per row: each opens a live card in the chat (src/widgets.js).
   widgetKinds().filter((w) => w.menu).forEach((w, i) => { if (i % 2 === 0) kb.row(); kb.text(w.menu, `wo:${w.kind}`); });
   if (appUrl()) kb.row().webApp('📱 Открыть пульт', appUrl());
@@ -291,7 +292,32 @@ export async function socialScreen() {
   return { text: lines.join('\n'), kb: backRow(kb) };
 }
 
-export function tasksScreen() {
+// ---------- the owner's tasks (src/todos.js): compact, by column, «done» in one tap ----------
+const COL_ICON = { today: '☀️', week: '📆', waiting: '⏳', inbox: '📥' };
+export function todosScreen() {
+  const c = todoCounts();
+  const open = listTodos();
+  const lines = [`📋 <b>Задачи</b> · сегодня ${c.today} · неделя ${c.week} · ждут ${c.waiting} · входящие ${c.inbox}${c.overdue ? ` · ⚠️ просрочено ${c.overdue}` : ''}`];
+  for (const st of ['today', 'week', 'waiting', 'inbox']) {
+    const rows = open.filter((t) => t.status === st);
+    if (!rows.length) continue;
+    lines.push('', `${COL_ICON[st]} <b>${STATUSES[st]}</b>`);
+    for (const t of rows.slice(0, 12)) lines.push(`• ${esc(todoLine(t))}`);
+    if (rows.length > 12) lines.push(`<i>и ещё ${rows.length - 12}</i>`);
+  }
+  if (!open.length) lines.push('', '<i>Открытых задач нет. Добавить: «добавь задачу позвонить Ане».</i>');
+  else lines.push('', `<i>Готово за неделю: ${c.done}. Добавить: «добавь задачу …»</i>`);
+  // Buttons for the first ten: today first, then the rest in the same order.
+  const kb = new InlineKeyboard();
+  for (const t of open.slice(0, 10)) {
+    kb.text(`✅ ${t.title.slice(0, 26)}`, `td:d:${t.id}`);
+    if (t.status !== 'today') kb.text('→ Сегодня', `td:t:${t.id}`);
+    kb.row();
+  }
+  return { text: lines.join('\n'), kb: backRow(kb) };
+}
+
+export function scheduleScreen() {
   const tasks = all('SELECT * FROM tasks ORDER BY id');
   const lines = ['⏰ <b>Задачи по расписанию</b>', ''];
   const kb = new InlineKeyboard();
@@ -316,7 +342,7 @@ export function systemScreen() {
   ];
   const kb = new InlineKeyboard();
   if (isPaused()) kb.text('▶️ Включить автоматику', 'sys:resume').success();
-  newRow(kb).text('⏰ Задачи', 'n:tasks');
+  newRow(kb).text('⏰ Расписание', 'n:sched');
   return { text: lines.join('\n'), kb: backRow(kb) };
 }
 
@@ -326,7 +352,8 @@ export async function screen(name, arg) {
     case 'today': return todayScreen();
     case 'sess': return sessionsScreen();
     case 'soc': return socialScreen();
-    case 'tasks': return tasksScreen();
+    case 'tasks': return todosScreen();
+    case 'sched': return scheduleScreen();
     case 'sys': return systemScreen();
     case 'proj': return projectScreen(Number(arg));
     default: return homeScreen();

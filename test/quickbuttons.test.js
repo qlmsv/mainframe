@@ -28,6 +28,6 @@ test('menu: quick buttons two in a row, then the screens row', () => {
   const kb = mainKeyboard({ name: 'Проект' });
   const rows = kb.keyboard.map((r) => r.map((b) => (typeof b === 'string' ? b : b.text)));
   assert.ok(rows.slice(0, -1).every((r) => r.length <= 2));
-  assert.deepEqual(rows.at(-1), ['🏠 Пульт', '📥 Входящие', '⚙️ Ещё']);
+  assert.deepEqual(rows.at(-1), ['🏠 Пульт', '📋 Задачи', '📥 Входящие', '⚙️ Ещё']);
   assert.equal(rows.slice(0, -1).flat().length, qb.quickButtons().length);
 });

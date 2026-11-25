@@ -13,6 +13,7 @@ import { transcribeAudio, voiceEnabled } from './voice.js';
 import { setMailApprover, decideSend } from './mailbox.js';
 import * as chatsetup from './chatsetup.js';
 import { quickFor } from './quickbuttons.js';
+import { addTodo, doneTodo, updateTodo, todoLine, STATUSES } from './todos.js';
 import { saveUpload, withAttachments } from './uploads.js';
 import { completeReminder } from './apple.js';
 import { refreshReport } from './social.js';
@@ -521,6 +522,7 @@ export function startBot() {
   bot.command('projects', (ctx) => showScreen(ctx, 'sess'));
   bot.command('social', (ctx) => showScreen(ctx, 'soc'));
   bot.command('tasks', (ctx) => showScreen(ctx, 'tasks'));
+  bot.command('schedule', (ctx) => showScreen(ctx, 'sched'));
   bot.command('setup', async (ctx) => {
     const p = currentProject();
     const runId = startRun({ projectId: p.id, prompt: `${ONBOARDING_PROMPT}\nВ памяти уже есть заметки (mainframe memory_list): не спрашивай то, что там уже есть, уточни только пробелы.`, origin: 'bot' });
@@ -594,9 +596,19 @@ export function startBot() {
     if (quick) {
       try { return await handleOwnerText(ctx, quick.prompt); } catch (e) { return ctx.reply(`⚠️ Не получилось: ${esc(e.message)}`, HTML); }
     }
+    // «добавь задачу …»: straight into the list, no session needed.
+    const add = /^(?:добавь|запиши|новая|создай)\s+задач[ауи]?\s*[:\-—]?\s*([\s\S]{2,300})$/i.exec(ctx.message.text.trim());
+    if (add) {
+      const title = add[1].trim().replace(/^[«"]|[»"]$/g, '');
+      const t = addTodo({ title, status: /(^|\s)сегодня(\s|$)/i.test(title) ? 'today' : 'inbox', source: 'бот' });
+      const kb = new InlineKeyboard().text('✅ Готово', `td:d:${t.id}`);
+      if (t.status !== 'today') kb.text('→ Сегодня', `td:t:${t.id}`);
+      kb.row().text('📋 Все задачи', 'n:tasks');
+      return ctx.reply(`${t.added ? '📝 Записано' : '📝 Уже есть'}: <b>${esc(todoLine(t))}</b> · ${STATUSES[t.status]}`, { ...HTML, reply_markup: kb });
+    }
     const menu = menuFor(ctx.message.text);
     if (menu) {
-      const map = { home: 'home', inbox: 'inbox', today: 'today', sessions: 'sess', social: 'soc', more: 'sys' };
+      const map = { home: 'home', todos: 'tasks', inbox: 'inbox', today: 'today', sessions: 'sess', social: 'soc', more: 'sys' };
       return showScreen(ctx, map[menu]).catch((e) => ctx.reply(`Не открылось: ${e.message}`));
     }
     try {
@@ -745,6 +757,13 @@ export function startBot() {
         toast = cancelSend(a) ? 'Отменено, не отправил' : row?.status === 'sent' ? 'Уже отправлено' : 'Уже не отменить';
         const what = undoLabels.get(Number(a)) || row?.target || '';
         await ctx.editMessageText(toast === 'Отменено, не отправил' ? `↩️ Отменено, не отправил: ${esc(what)}` : `${row?.status === 'sent' ? '📤 Уже отправлено' : '⚠️ Уже не отменить'}: ${esc(what)}`, HTML).catch(() => {});
+      } else if (kind === 'td') {
+        // A task from the list: done, or into «Сегодня».
+        const t = a === 'd' ? doneTodo(Number(b)) : updateTodo(Number(b), { status: 'today' });
+        toast = a === 'd' ? `✅ Готово: ${t.title.slice(0, 40)}` : `☀️ На сегодня: ${t.title.slice(0, 40)}`;
+        const msgText = ctx.callbackQuery.message?.text || '';
+        if (msgText.startsWith('📋')) await edit(ctx, await screen('tasks'));
+        else await ctx.editMessageReplyMarkup({ reply_markup: a === 'd' ? undefined : new InlineKeyboard().text('✅ Готово', `td:d:${t.id}`).text('📋 Все задачи', 'n:tasks') }).catch(() => {});
       } else if (kind === 'x') {
         stopRun(Number(a));
         toast = 'Остановлено';
@@ -755,7 +774,7 @@ export function startBot() {
       } else if (kind === 'tt') {
         const t = get('SELECT * FROM tasks WHERE id = ?', Number(a));
         if (t) updateTask(t.id, { enabled: t.enabled ? 0 : 1 });
-        await edit(ctx, await screen('tasks'));
+        await edit(ctx, await screen('sched'));
       } else if (kind === 'soc') {
         refreshReport();
         toast = 'Собираю сводку, 1–3 минуты';
@@ -960,7 +979,8 @@ export function startBot() {
     { command: 'inbox', description: 'Входящие' },
     { command: 'projects', description: 'Сессии: куда идут команды' },
     { command: 'social', description: 'Соцсети и советы' },
-    { command: 'tasks', description: 'Задачи по расписанию' },
+    { command: 'tasks', description: 'Мои задачи: сегодня, неделя, ждут ответа' },
+    { command: 'schedule', description: 'Задачи по расписанию' },
     { command: 'memory', description: 'Память: что я знаю, одобрить новое' },
     { command: 'model', description: 'Модель: какая работает, сменить провайдера' },
     { command: 'setup', description: 'Знакомство: рассказать о себе' },

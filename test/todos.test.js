@@ -1,5 +1,5 @@
 import './_env.js';
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 const t = await import('../src/todos.js');
 
@@ -35,3 +35,21 @@ test('mainframe MCP server builds with the todo tools', async () => {
   const names = Object.keys(s.mainframe.instance?._registeredTools || {});
   for (const n of ['todo_add', 'todo_list', 'todo_update', 'todo_done']) assert.ok(names.includes(n), n);
 });
+
+test('widgets «Сегодня» and the wheel take the tasks', async () => {
+  t.addTodo({ title: 'Задача для виджета', status: 'today' });
+  const { _data } = await import('../src/widgets.js');
+  assert.ok(JSON.parse(await _data.todayData()).rm.includes('Задача для виджета'));
+  assert.ok(JSON.parse(await _data.spinData()).t.includes('Задача для виджета'));
+});
+
+test('bot screen: tasks by column with done buttons', async () => {
+  const { todosScreen } = await import('../src/botui.js');
+  const s = todosScreen();
+  assert.match(s.text, /☀️ <b>Сегодня<\/b>/);
+  const cb = s.kb.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(cb.some((c) => /^td:d:\d+$/.test(c)) && cb.some((c) => /^td:t:\d+$/.test(c)));
+});
+
+// The widgets open a calendar connection that keeps the process alive: end it like widgets.test.js.
+after(() => setTimeout(() => process.exit(0), 100).unref());
