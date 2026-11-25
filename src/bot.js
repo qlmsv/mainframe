@@ -464,7 +464,7 @@ export function startBot() {
     const sent = ctx.message?.date;
     if (sent && Date.now() / 1000 - sent > 600) {
       const what = ctx.message.text ? `«${esc(cut(ctx.message.text, 200))}»` : 'голосовое';
-      return ctx.reply(`⏸ Пропустил старое сообщение ${what}: мейнфрейм был недоступен. Если ещё актуально, отправь заново.`, HTML);
+      return ctx.reply(`⏸ Пропустил старое сообщение ${what}: ${config.assistantName} была недоступна. Если ещё актуально, отправь заново.`, HTML);
     }
     return next();
   });
@@ -559,7 +559,7 @@ export function startBot() {
       const service = /no-?reply|notif|alert|bank|care@|support@|mailer|info@|billing|receipt/i.test(item.username || '') || /^(777000)$/.test(String(item.chat_id));
       const kb = new InlineKeyboard();
       if (!service) kb.text(`✅ Отправить ${String(item.name || '').slice(0, 20)}`, `r:${item.id}`).success().row();
-      kb.text('🧠 Это задача мейнфрейму', `tk:${item.id}`).primary();
+      kb.text(`🧠 Это задача: ${config.assistantName}`, `tk:${item.id}`).primary();
       return ctx.reply(`${heard}${service ? `Это сервисная рассылка (${esc(item.username || item.name)}), отвечать туда нельзя.` : `Отправить это ${esc(item.name)}${item.source === 'mail' ? ' письмом' : ''} или это задача мне?`}\n\n<blockquote>${esc(text.slice(0, 800))}</blockquote>`, { ...HTML, reply_markup: kb });
     }
     const p = (link?.project_id && get('SELECT * FROM projects WHERE id = ?', link.project_id)) || currentProject();
@@ -938,7 +938,7 @@ export function startBot() {
     { command: 'menu', description: 'Пульт и меню' },
     { command: 'inbox', description: 'Входящие' },
     { command: 'day', description: 'Карточка дня' },
-    { command: 'board', description: 'Табло: что сейчас делает мейнфрейм' },
+    { command: 'board', description: `Табло: что сейчас делает ${config.assistantName}` },
     { command: 'money', description: 'Деньги: счета и траты' },
     { command: 'today', description: 'Встречи и напоминания' },
     { command: 'projects', description: 'Сессии: куда идут команды' },
@@ -953,8 +953,20 @@ export function startBot() {
     // Widgets that optional modules bring, for example /trade.
     ...widgets.widgetKinds().filter((k) => !['day', 'money', 'board'].includes(k.kind)).map((k) => ({ command: k.kind, description: String(k.description || k.kind).slice(0, 60) })),
   ]).catch(() => {});
-  bot.api.setMyShortDescription('Личный мейнфрейм владельца: входящие, сессии Claude Code, календарь, соцсети.').catch(() => {});
-  bot.api.setMyDescription('Пульт мейнфрейма. Пиши или говори задачу, разбирай входящие, смотри встречи и соцсети. Работает только для владельца.').catch(() => {});
+  // Name and descriptions only when they changed: Telegram limits setMyName to a few calls a day.
+  const nm = config.assistantName;
+  const about = {
+    name: nm,
+    short: `${nm}: личный помощник. Пиши или говори задачу, я сделаю и расскажу.`,
+    long: `Привет! Я ${nm}, личный помощник. Пиши или говори голосом, что нужно: разберу сообщения и почту, напомню о встречах, сделаю задачу и покажу, как идут дела. Отвечаю только своему владельцу.`,
+  };
+  if (kvGet('bot_about', '') !== JSON.stringify(about)) {
+    Promise.all([
+      bot.api.setMyName(about.name),
+      bot.api.setMyShortDescription(about.short),
+      bot.api.setMyDescription(about.long),
+    ]).then(() => kvSet('bot_about', JSON.stringify(about))).catch((e) => addLog('error', `Имя бота: ${e.message.slice(0, 120)}`));
+  }
 
   widgets.setWidgetApi(bot.api);
   widgets.startDayCard(ownerId);

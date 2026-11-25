@@ -120,7 +120,7 @@ export function homeScreen() {
   const auth = kvGet('auth_error', null);
   const dot = (ok) => (ok ? '🟢' : '🔴');
   const lines = [
-    '<b>Мейнфрейм</b>',
+    `<b>${esc(config.assistantName)}</b>`,
     '',
     `📥 Ждут решения: <b>${waiting}</b>`,
     `🧠 Работает сессий: <b>${running}</b>`,
@@ -348,7 +348,7 @@ const ACTIVITY = [
   [/computer/i, '🖥', 'Управляю Mac'],
   [/Metricool/i, '📊', 'Смотрю соцсети'],
   [/mainframe.*(expense|balance)/i, '💸', 'Записываю в финансы'],
-  [/mainframe/i, '🧩', 'Работаю с мейнфреймом'],
+  [/mainframe/i, '🧩', 'Работаю с пультом'],
   [/trello/i, '📋', 'Смотрю Trello'],
 ];
 const DOTS = ['', '.', '..', '...'];

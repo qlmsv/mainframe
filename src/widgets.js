@@ -123,7 +123,7 @@ export async function moneyData() {
 }
 
 // ---------- 5. «Мейнфрейм сейчас» board ----------
-const BOARD = page('', `const SPK=${JSON.stringify(SPARK(30))};function render(d){const w=document.getElementById('w');const dot=(ok,t)=>'<span class="tile" style="flex:none;padding:4px 8px">'+(ok?'🟢':'🔴')+' '+t+'</span>';w.innerHTML='<div class="row">'+SPK.replace('class="spk"','class="spk '+(d.r?'working':d.i?'waiting':'')+'"')+'<div class="sp b">Мейнфрейм сейчас</div><span class="m">'+(d.tm||'')+'</span></div>'
+const BOARD = page('', `const SPK=${JSON.stringify(SPARK(30))};function render(d){const w=document.getElementById('w');const dot=(ok,t)=>'<span class="tile" style="flex:none;padding:4px 8px">'+(ok?'🟢':'🔴')+' '+t+'</span>';w.innerHTML='<div class="row">'+SPK.replace('class="spk"','class="spk '+(d.r?'working':d.i?'waiting':'')+'"')+'<div class="sp b">${config.assistantName.replace(/['\\<]/g, '')} сейчас</div><span class="m">'+(d.tm||'')+'</span></div>'
 +'<div class="row" style="margin:8px 0">'+[['В работе',d.r],['Ждут тебя',d.i],['За сегодня',d.d]].map(x=>'<div class="tile"><span class="m">'+x[0]+'</span><b>'+(x[1]??0)+'</b></div>').join('')+'</div>'
 +(d.n||[]).map(x=>'<div class="l fade">⚙️ '+x+'</div>').join('')
 +'<div class="row" style="flex-wrap:wrap;margin-top:6px">'+dot(d.mac,'Mac')+dot(d.tg,'Telegram')+dot(d.cl,'Claude')+'</div>'}`, 'board', 15);
@@ -146,7 +146,7 @@ export async function boardData() {
 const KINDS = {
   day: { html: DAY, data: dayData, caption: '☀️ Карточка дня', h: 0 },
   money: { html: MONEY, data: moneyData, caption: '💳 Деньги', h: 0 },
-  board: { html: BOARD, data: boardData, caption: '🧠 Мейнфрейм сейчас', h: 0 },
+  board: { html: BOARD, data: boardData, caption: `🧠 ${config.assistantName} сейчас`, h: 0 },
 };
 
 export const _html = { DAY, MONEY, BOARD };
