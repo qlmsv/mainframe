@@ -1,5 +1,6 @@
 import { Bot, InlineKeyboard, API_CONSTANTS } from 'grammy';
 import * as widgets from './widgets.js';
+import { LiveSticker, ensureStickerSet } from './stickers.js';
 import { config } from './config.js';
 import { all, get, run, now, kvGet, kvSet, addLog } from './db.js';
 import { bus } from './bus.js';
@@ -192,7 +193,19 @@ async function trackRun(runId, chatId, userMsgId, project) {
       addLog('error', `Статус работы: ${e.message.slice(0, 120)}`);
     }
   }
-  t.timer = setInterval(() => pushDraft(runId), 3000);
+  // Искра's sticker under the status, by state (src/stickers.js); nothing without file_ids.
+  t.sticker = new LiveSticker(bot.api, Number(chatId));
+  t.sticker.set('thinking');
+  t.timer = setInterval(() => { pushDraft(runId); t.sticker.set(runFace(runId)); }, 3000);
+}
+
+// The state Искра shows for a run: stumbled on an error, waits in the queue, works with tools, or thinks.
+function runFace(runId) {
+  const r = get('SELECT status FROM runs WHERE id = ?', runId);
+  if (r?.status === 'queued') return 'waiting';
+  const lastEv = get("SELECT kind FROM run_events WHERE run_id = ? AND kind IN ('tool','text','error') ORDER BY id DESC LIMIT 1", runId);
+  if (lastEv?.kind === 'error') return 'error';
+  return get("SELECT 1 x FROM run_events WHERE run_id = ? AND kind = 'tool' LIMIT 1", runId) ? 'working' : 'thinking';
 }
 
 bus.on('change', (e) => {
@@ -210,6 +223,7 @@ function untrack(runId) {
   clearInterval(t.timer);
   clearTimeout(t.pending);
   live.delete(runId);
+  t.sticker?.close();
   return t;
 }
 
@@ -978,6 +992,7 @@ export function startBot() {
       botState.status = 'running';
       botState.username = me.username;
       addLog('system', `Бот @${me.username} запущен`);
+      ensureStickerSet(bot.api, ownerId(), me.username);
       updateMenuButton();
       // Once: replace the old always-open keyboard with the compact one.
       // Once more: the menu got quick request buttons.
