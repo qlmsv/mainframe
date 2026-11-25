@@ -448,9 +448,9 @@ function serveStatic(res, pathname, req = null) {
   // The page holds the key to the Mac: scripts only from here and from Telegram's Mini App SDK.
   if (file.endsWith('.html')) headers['content-security-policy'] = CSP;
   res.writeHead(200, headers);
-  // The remote's shell and manifest carry the default name «Искра»: show ASSISTANT_NAME instead.
-  if ((file === path.join(PUBLIC, 'index.html') || file.endsWith('manifest.webmanifest')) && config.assistantName !== 'Искра') {
-    return res.end(fs.readFileSync(file, 'utf8').replaceAll('Искра', config.assistantName.replace(/[<>"&\\]/g, '')));
+  // The remote's shell and manifest carry the default name «Vega»: show ASSISTANT_NAME instead.
+  if ((file === path.join(PUBLIC, 'index.html') || file.endsWith('manifest.webmanifest')) && config.assistantName !== 'Vega') {
+    return res.end(fs.readFileSync(file, 'utf8').replaceAll('Vega', config.assistantName.replace(/[<>"&\\]/g, '')));
   }
   fs.createReadStream(file).pipe(res);
 }
