@@ -133,6 +133,8 @@ config.deployTrusted = (() => { const v = env('DEPLOY_TRUSTED_RE', ''); try { re
 config.deployAsk = (() => { const v = env('DEPLOY_ASK_RE', 'verdeect|verdict|вердикт|Business AI OS'); try { return v ? new RegExp(v, 'i') : null; } catch { return null; } })();
 // An answer that ends asking for a «да» the owner gave in advance goes on by itself (AUTO_CONTINUE=0: off).
 config.autoContinue = env('AUTO_CONTINUE', '1') !== '0';
+// The first answer waits this long while background work goes on (at least 3 s).
+config.earlyAnswerMs = (() => { const v = Number(env('EARLY_ANSWER_SEC', '60')); return Math.max(3, Number.isFinite(v) ? v : 60) * 1000; })();
 // Work log («что сделано»): its tail goes in front of requests; WORK_LOG_AUTO=0 stops filling it from run results.
 config.workLog = { inject: flag('WORK_LOG_INJECT', true), auto: flag('WORK_LOG_AUTO', true), days: Number(env('WORK_LOG_DAYS', '7')) || 7, max: Number(env('WORK_LOG_MAX_CHARS', '1500')) || 1500 };
 // The computer's bridges (local http MCP servers from mcp.json): checked every minute, restarted over

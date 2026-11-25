@@ -26,7 +26,9 @@ export const onRunFinished = (fn) => listeners.add(fn);
 // The answer to the owner went out while background work (agents) keeps the run going.
 const answeredListeners = new Set();
 export const onRunAnswered = (fn) => answeredListeners.add(fn);
-const EARLY_AFTER_MS = 3000;
+// How long the first answer waits while background work goes on: work done by then comes as one
+// message (the result), not «беру в работу» plus the result a moment later (EARLY_ANSWER_SEC).
+const EARLY_AFTER_MS = config.earlyAnswerMs;
 export const isPaused = () => kvGet('paused', false);
 export const activeRuns = () => [...active.keys()];
 
@@ -436,6 +438,7 @@ async function execute(runId, { fork = false } = {}) {
   let afterAnswerError = null; // background work failed after the answer went out
   let lastUsage = null; // the last result message: running totals of spend
   let earlyTimer = null; // sends the answer early when background work keeps the run going
+  let earlySent = false;
   const base = usageBase(project.id, project.session_id, runId);
   try {
     if (!path.isAbsolute(project.cwd || '')) throw new Error(`Папка проекта должна быть полным путём, сейчас: «${project.cwd || ''}»`);
@@ -499,6 +502,7 @@ async function execute(runId, { fork = false } = {}) {
           earlyTimer = setTimeout(() => {
             const a = active.get(runId);
             if (a) a.answered = true;
+            earlySent = true;
             addEvent(runId, 'system', 'Ответ отправлен, фоновая работа продолжается');
             const row = get('SELECT * FROM runs WHERE id = ?', runId);
             for (const fn of answeredListeners) Promise.resolve().then(() => fn({ ...row, status: 'done', result: answer, finished_at: now() }, project)).catch((e) => addLog('error', `onRunAnswered: ${e.message}`));
@@ -531,6 +535,12 @@ async function execute(runId, { fork = false } = {}) {
     if (earlyTimer) clearTimeout(earlyTimer);
     active.delete(runId);
     if (lastCtx && sessionId) saveCtxTokens(sessionId, lastCtx);
+  }
+  // The background work finished before the first answer went out: one message with its result,
+  // without the «беру, пришлю итог» that came first.
+  if (!earlySent && later.length && status === 'done') {
+    result = later.join('\n\n');
+    addEvent(runId, 'system', 'Работа закончилась быстро: один итог без промежуточного ответа');
   }
   const spend = lastUsage ? (() => {
     const tot = usageTotals(lastUsage);
