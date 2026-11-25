@@ -36,14 +36,16 @@ const fakeApi = (fail) => {
   };
 };
 
-test('auto mode: a refused widget becomes a card with buttons; cards mode never tries HTML', async () => {
+test('auto mode: a refused widget becomes a Mini App button or a card; cards mode never tries HTML', async () => {
   let api = fakeApi(true); w.setWidgetApi(api);
+  (await import('../src/db.js')).kvSet('widgets_allowed', null);
   delete process.env.WIDGETS;
   const m = await w.sendWidget(1, 'spin');
   assert.equal(m.message_id, 2);
   assert.equal(api.log[0][0], 'widget');
   assert.equal(api.log[1][0], 'card');
-  assert.ok(JSON.stringify(api.log[1][2].reply_markup).includes('wg:spin'));
+  // With a public https address the refused widget opens as a Mini App («Открыть»), else a card.
+  assert.ok(JSON.stringify(api.log[1][2].reply_markup).includes(w.miniUrl('spin') ? '/w/spin' : 'wg:spin'));
   process.env.WIDGETS = 'cards';
   api = fakeApi(false); w.setWidgetApi(api);
   await w.sendWidget(1, 'today');

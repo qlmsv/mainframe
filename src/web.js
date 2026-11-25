@@ -30,6 +30,8 @@ import { channelStats, socialState, refreshReport } from './social.js';
 import { agenda, upcomingReminders, completeReminder, createReminder, createEvent, notesList, noteBody, createNote } from './apple.js';
 
 import { addTodo, listTodos, updateTodo, doneTodo, deleteTodo, todoCounts } from './todos.js';
+import { verifyInitData, miniPage, miniCsp } from './miniapp.js';
+import { widgetHtml, miniQuery } from './widgets.js';
 import * as setup from './setup.js';
 import * as modes from './modes.js';
 import * as mailbox from './mailbox.js';
@@ -561,6 +563,22 @@ export function startWeb() {
       }
       if (url.pathname === '/bridge/register' && req.method === 'POST') {
         return send(res, 200, modes.bridgeRegister(await readBody(req, 20_000)));
+      }
+      // The widgets as a Telegram Mini App (src/miniapp.js): the page is public and empty,
+      // its data only for the owner's signed Telegram initData.
+      const wm = url.pathname.match(/^\/w\/([\w-]{2,30})$/);
+      if (wm && req.method === 'GET') {
+        const html = widgetHtml(wm[1]);
+        if (!html) return send(res, 404, 'Нет такого экрана');
+        const nonce = crypto.randomBytes(16).toString('base64');
+        return send(res, 200, miniPage(html, wm[1], nonce), { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': miniCsp(nonce), 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
+      }
+      if (url.pathname === '/w/api' && req.method === 'POST') {
+        if (req.headers['x-mf-client'] !== '1') return send(res, 403, { error: 'Нет доступа' });
+        const body = await readBody(req, 20_000);
+        const user = verifyInitData(body.initData, config.botToken);
+        if (!user || !ownerId() || String(user.id) !== String(ownerId())) return send(res, 401, { error: 'Открой из бота: этот экран только для владельца' });
+        return send(res, 200, { data: await miniQuery(String(body.q || '').slice(0, 100)) });
       }
       // First-run wizard: only while SETUP_CODE is set and the setup is not finished.
       if (url.pathname === '/setup' || url.pathname.startsWith('/setup/') || url.pathname.startsWith('/api/setup/')) return await handleSetup(req, res, url);

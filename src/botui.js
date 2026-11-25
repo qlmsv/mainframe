@@ -9,7 +9,7 @@ import { activeRuns, isPaused } from './agent.js';
 import { tgState } from './telegram-mcp.js';
 import { mailState } from './mail.js';
 import { agenda } from './apple.js';
-import { widgetKinds } from './widgets.js';
+import { widgetKinds, widgetMode, widgetsAllowed, miniUrl } from './widgets.js';
 import { channelStats, socialState } from './social.js';
 
 // ---------- formatting ----------
@@ -133,12 +133,19 @@ export function homeScreen() {
     auth ? `⚠️ Claude не авторизован: на Mac <code>claude auth login</code>` : '',
     '<i>Пиши или говори задачу прямо сюда. Свайп по сообщению бота: ответить человеку или продолжить сессию.</i>',
   ].filter((l) => l !== '');
+  // A screen button: while Telegram does not allow HTML widgets, the same design opens as a Mini App
+  // right from this button (web_app); otherwise it sends the widget into the chat (src/widgets.js).
+  const mini = widgetMode() === 'auto' && widgetsAllowed() !== true;
+  const open = (label, kind) => (mini && miniUrl(kind) ? kb.webApp(label, miniUrl(kind)) : kb.text(label, `wo:${kind}`));
   const kb = new InlineKeyboard()
-    .text(`📥 Входящие${waiting ? ` · ${waiting}` : ''}`, 'n:inbox').primary().text('☀️ Сегодня', 'wo:today').row()
-    .text('🧠 Сессии', 'n:sess').text('📊 Соцсети', 'n:soc').row()
-    .text(`📋 Задачи${todoCounts().today ? ` · ${todoCounts().today}` : ''}`, 'n:tasks').text('⚙️ Система', 'n:sys');
-  // Widgets, two per row: each opens a live card in the chat (src/widgets.js).
-  widgetKinds().filter((w) => w.menu).forEach((w, i) => { if (i % 2 === 0) kb.row(); kb.text(w.menu, `wo:${w.kind}`); });
+    .text(`📥 Входящие${waiting ? ` · ${waiting}` : ''}`, 'n:inbox').primary();
+  open('☀️ Сегодня', 'today'); kb.row()
+    .text('🧠 Сессии', 'n:sess').text('📊 Соцсети', 'n:soc').row();
+  if (mini && miniUrl('todo')) kb.webApp(`📋 Задачи${todoCounts().today ? ` · ${todoCounts().today}` : ''}`, miniUrl('todo'));
+  else kb.text(`📋 Задачи${todoCounts().today ? ` · ${todoCounts().today}` : ''}`, 'n:tasks');
+  kb.text('⚙️ Система', 'n:sys');
+  // Widgets, two per row.
+  widgetKinds().filter((w) => w.menu && w.kind !== 'todo').forEach((w, i) => { if (i % 2 === 0) kb.row(); open(w.menu, w.kind); });
   if (appUrl()) kb.row().webApp('📱 Открыть пульт', appUrl());
   return { text: lines.join('\n'), kb };
 }

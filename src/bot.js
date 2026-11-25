@@ -88,7 +88,8 @@ export async function sendOwner(html, extra = {}) {
   return send((topic && topics.destFor(topic)) || id, html, rest);
 }
 
-async function edit(ctx, { text, kb }) {
+async function edit(ctx, { text, kb: kb0 }) {
+  const kb = forChat(ctx, kb0);
   try {
     await ctx.editMessageText(text, { ...HTML, reply_markup: kb });
   } catch (e) {
@@ -115,9 +116,14 @@ async function sendMenu(chatId, note) {
   await bot.api.sendMessage(chatId, note || `🎯 Команды идут в <b>${esc(p.name)}</b>`, { ...HTML, reply_markup: mainKeyboard(p) });
 }
 
+// Telegram accepts web_app buttons only in the private chat: in a group (a topic) those buttons go.
+const forChat = (ctx, kb) => {
+  if (!kb || ctx.chat?.type === 'private') return kb;
+  return { inline_keyboard: (kb.inline_keyboard || []).map((r) => r.filter((b) => !b.web_app)).filter((r) => r.length) };
+};
 async function showScreen(ctx, name, arg) {
   const s = await screen(name, arg);
-  return ctx.reply(s.text, { ...HTML, reply_markup: s.kb });
+  return ctx.reply(s.text, { ...HTML, reply_markup: forChat(ctx, s.kb) });
 }
 
 // ---------- live progress of runs started from the bot ----------
@@ -446,6 +452,12 @@ export function startBot() {
 
   bot.command('start', async (ctx) => {
     const code = (ctx.match || '').trim();
+    // t.me/<bot>?start=w_today (the «Открыть» link from a group): the screen in the private chat.
+    const wk = /^w_([\w-]{2,30})$/.exec(code);
+    if (wk && ownerId() && String(ctx.from?.id) === String(ownerId()) && ctx.chat.type === 'private' && widgets.widgetKinds().some((k) => k.kind === wk[1])) {
+      try { await widgets.sendWidget(ctx.chat.id, wk[1]); } catch (e) { await ctx.reply(`Не открылось: ${esc(e.message.slice(0, 150))}`); }
+      return;
+    }
     if (!ownerId()) {
       if (code && code === config.pairingCode) {
         kvSet('owner_tg_id', String(ctx.from.id));
@@ -1033,6 +1045,8 @@ export function startBot() {
 
   widgets.setWidgetApi(bot.api);
   widgets.startDayCard(ownerId);
+  // Once a day: has Telegram opened HTML widgets for this bot? Then switch to them and say so once.
+  widgets.startWidgetProbe(ownerId, (t) => sendOwner(t));
   bot.start({
     drop_pending_updates: false,
     allowed_updates: [...API_CONSTANTS.DEFAULT_UPDATE_TYPES, 'message_reaction', 'widget_query', 'shared_widget_query'],
@@ -1041,6 +1055,7 @@ export function startBot() {
       botState.username = me.username;
       addLog('system', `Бот @${me.username} запущен`);
       ensureStickerSet(bot.api, ownerId(), me.username);
+      widgets.setWidgetBot(me.username);
       updateMenuButton();
       // Once: replace the old always-open keyboard with the compact one.
       // Once more: the menu got quick request buttons.

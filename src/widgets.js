@@ -4,7 +4,7 @@
 // answered by answerWidgetQuery (≤1024 bytes). Every widget also gets a text caption for old apps.
 import net from 'node:net';
 import { LOCAL_OFFSET, config } from './config.js';
-import { topTodos, listTodos } from './todos.js';
+import { topTodos, listTodos, doneTodo, updateTodo, todoCounts } from './todos.js';
 import { all, get, kvGet, kvSet, addLog } from './db.js';
 import { financeSummary, rates } from './finance.js';
 import { agenda } from './apple.js';
@@ -241,6 +241,19 @@ export async function spinData() {
   return fit({ t: t.slice(0, 8) });
 }
 
+// ---------- 9. «Задачи»: the owner's open tasks, «готово» in one tap ----------
+const TODO = page('', `const SPK=${JSON.stringify(SPARK(36, 'sq'))};const IC={today:'☀️',week:'📆',waiting:'⏳',inbox:'📥'};
+function render(d){const w=document.getElementById('w');const t=d.t||[];w.innerHTML='<div class="row">'+SPK.replace('class="spk"','class="spk '+(t.length?'working':'done')+'"')+'<div class="sp"><div class="b">Задачи</div><div class="m">сегодня '+(d.c?d.c[0]:0)+' · неделя '+(d.c?d.c[1]:0)+' · ждут '+(d.c?d.c[2]:0)+'</div></div><button class="btn" onclick="pull()">↻</button></div>'
++(t.length?t.map(x=>'<div class="row l fade" id="t'+x[0]+'"><button class="btn" style="padding:4px 8px" onclick="done('+x[0]+',this)">✓</button><span class="sp nw">'+(IC[x[2]]||'')+' '+x[1]+'</span>'+(x[3]?'<span class="m">'+x[3]+'</span>':'')+(x[2]!=='today'?'<button class="btn" style="padding:4px 8px" onclick="today('+x[0]+',this)">→☀️</button>':'')+'</div>').join(''):'<div class="m" style="margin-top:8px">Открытых задач нет 🌿</div>')}
+function act(a,b){b.disabled=true;W.request('todo:'+a).then(r=>{if(r&&r.result){D=JSON.parse(r.result);draw()}W.HapticFeedback&&W.HapticFeedback.notificationOccurred('success')},()=>{b.disabled=false})}
+function done(id,b){const r=document.getElementById('t'+id);if(r)r.style.opacity=.35;act('done.'+id,b)}function today(id,b){act('today.'+id,b)}`, 'todo', 60);
+
+export async function todoData() {
+  const c = todoCounts();
+  const day = (due) => (due ? new Date(due.length <= 10 ? `${due}T12:00` : due).toLocaleDateString('ru', { day: 'numeric', month: 'short' }) : '');
+  return fit({ c: [c.today, c.week, c.waiting, c.inbox], t: listTodos().slice(0, 10).map((x) => [x.id, cut(x.title, 34), x.status, day(x.due)]) });
+}
+
 // ---------- cards: the same widgets as ordinary messages, for apps or bots without HTML widgets ----------
 const e = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const CARDS = {
@@ -249,6 +262,7 @@ const CARDS = {
   work: (d) => [`${(d.r || []).length ? '⚡' : '😴'} <b>${NAME} ${d.st ? 'на паузе' : (d.r || []).length ? 'работает' : 'отдыхает'}</b> · ${e(d.tm)}`,
     `Сейчас ${(d.r || []).length} · ждут тебя ${d.i || 0} · сделано ${d.d || 0}${d.q ? ` · в очереди ${d.q}` : ''}`, ...(d.r || []).map((r) => `${r[2] ? '⏰' : '⚙️'} ${e(r[0])} · ${r[1]} мин`)].join('\n'),
   money: (d) => [`💳 <b>Всего: ${e(d.tot)}</b>`, `Траты: сегодня ${e(d.td)} · 7 дней ${e(d.wk)} · месяц ${e(d.mo)}`, ...(d.c || []).map((c) => `• ${e(c[0])}: ${e(c[2])}`)].join('\n'),
+  todo: (d) => ((d.t || []).length ? [`📋 <b>Задачи</b> · сегодня ${(d.c || [])[0] || 0} · неделя ${(d.c || [])[1] || 0}`, ...(d.t || []).map((x) => `• ${e(x[1])}${x[3] ? ` · ${e(x[3])}` : ''}`)].join('\n') : '📋 Открытых задач нет'),
   spin: (d) => ((d.t || []).length ? [`🎡 <b>Что сделать первым?</b>`, ...(d.t || []).map((x, i) => `${i === d.p ? '👉 <b>' : ''}${i + 1}. ${e(x)}${i === d.p ? '</b>' : ''}`)].join('\n') : '🎡 На сегодня дел нет. Отдыхай!'),
 };
 CARDS.day = CARDS.today; CARDS.board = CARDS.work;
@@ -261,19 +275,31 @@ const KINDS = {
   work: { html: WORK, data: workData, caption: `⚡ ${NAME} в работе`, description: `В работе: что делает ${NAME}, кнопка «Стоп»`, menu: '⚡ В работе', actions: { stop: () => stopAll() } },
   money: { html: MONEY, data: moneyData, caption: '💳 Деньги', description: 'Деньги: остатки и траты', menu: '💳 Деньги' },
   spin: { html: SPIN, data: spinData, caption: '🎡 Что сделать первым', description: 'Рулетка: что сделать первым', menu: '🎡 Рулетка' },
+  todo: { html: TODO, data: todoData, caption: '📋 Задачи', description: 'Задачи: сегодня, неделя, ждут ответа', menu: '📋 Задачи',
+    actions: { done: (id) => doneTodo(Number(id)), today: (id) => updateTodo(Number(id), { status: 'today' }) } },
   // Old names, kept for the commands people already know.
   day: { html: TODAY, data: todayData, caption: '☀️ Сегодня', hidden: true },
   board: { html: WORK, data: workData, caption: `⚡ ${NAME} в работе`, hidden: true, actions: { stop: () => stopAll() } },
 };
 
-export const _html = { DAY, MONEY, BOARD, TODAY, WORK, SPIN };
-export const _data = { todayData, workData, spinData, moneyData };
+export const _html = { DAY, MONEY, BOARD, TODAY, WORK, SPIN, TODO };
+export const _data = { todayData, workData, spinData, moneyData, todoData };
 // Built-in widgets plus the ones optional modules bring (/kind commands in the bot).
 const kinds = () => ({ ...KINDS, ...moduleWidgets() });
 export const widgetKinds = () => Object.entries(kinds()).map(([kind, k]) => ({ kind, description: k.description || k.caption, menu: k.menu || null, hidden: !!k.hidden }));
 let api = null; // grammy bot.api, set by the bot
 export const setWidgetApi = (a) => { api = a; };
-let htmlRefusedAt = 0; // auto mode: after Telegram refused a widget, cards for 10 minutes
+let botUser = null; // the bot's @username, for t.me links from groups
+export const setWidgetBot = (u) => { botUser = u || null; };
+// Does Telegram let this bot send HTML widgets? null: not known yet, false: refused
+// (INPUT_MEDIA_WIDGET_NOT_ALLOWED: Telegram opens them «gradually»), true: allowed.
+// While refused, auto mode sends the same design as a Mini App; a daily probe notices when they open.
+export const widgetsAllowed = () => kvGet('widgets_allowed', null);
+const refused = (err) => /WIDGET_NOT_ALLOWED|INPUT_MEDIA_WIDGET|method not found|Not Found/i.test(String(err?.message || err));
+// The Mini App address of a widget, or null without a public https address.
+export const miniUrl = (kind) => (config.publicUrl?.startsWith('https://') ? `${config.publicUrl.replace(/\/$/, '')}/w/${kind}` : null);
+// web_app buttons work only in the private chat («-100…#7» topics and groups get a card).
+const isPrivate = (chatId) => /^\d+$/.test(String(chatId));
 
 // A card: the same data as a message with buttons, edited in place by the buttons.
 export function cardOf(kind, dataStr, extra = {}) {
@@ -288,20 +314,39 @@ export function cardOf(kind, dataStr, extra = {}) {
   return { text: text.slice(0, 4000), reply_markup: { inline_keyboard: rows } };
 }
 
+// The Mini App message: the card's first line and one «Открыть» button that opens the live screen.
+export function miniMessage(kind, dataStr) {
+  const k = kinds()[kind];
+  const head = String((k.card || CARDS[kind])?.(JSON.parse(dataStr || '{}')) || k.caption).split('\n')[0];
+  return { text: `${head}\n<i>Живой экран: открой и смотри, данные обновляются сами.</i>`, reply_markup: { inline_keyboard: [[{ text: `✨ Открыть ${k.caption.replace(/^\S+\s/, '')}`, web_app: { url: miniUrl(kind) } }]] } };
+}
+
 export async function sendWidget(chatId, kind) {
   const k = kinds()[kind];
   const data = await k.data().catch(() => '{}');
   const mode = widgetMode();
-  if (mode === 'html' || (mode === 'auto' && Date.now() - htmlRefusedAt > 600000)) {
+  if (mode === 'html' || (mode === 'auto' && widgetsAllowed() !== false)) {
     try {
-      return await api.raw.sendWidget({ chat_id: chatId, html: k.html, chat_data: data, caption: k.caption, allow_queries: true, disable_notification: true });
+      const m = await api.raw.sendWidget({ chat_id: chatId, html: k.html, chat_data: data, caption: k.caption, allow_queries: true, disable_notification: true });
+      if (widgetsAllowed() !== true) kvSet('widgets_allowed', true);
+      return m;
     } catch (err) {
       if (mode === 'html') throw err;
-      htmlRefusedAt = Date.now();
-      addLog('error', `Виджет ${kind} не ушёл, шлю карточку: ${err.message.slice(0, 120)}`);
+      if (refused(err)) kvSet('widgets_allowed', false);
+      addLog('error', `Виджет ${kind} не ушёл, открою мини-приложением: ${err.message.slice(0, 120)}`);
     }
   }
+  // The same design as a Mini App (private chat and a public https address), else a card.
+  if (mode === 'auto' && miniUrl(kind) && isPrivate(chatId)) {
+    const mm = miniMessage(kind, data);
+    return api.sendMessage(chatId, mm.text, { parse_mode: 'HTML', reply_markup: mm.reply_markup, disable_notification: true, link_preview_options: { is_disabled: true } });
+  }
   const c = cardOf(kind, data);
+  // In a group (a topic) Telegram rejects web_app buttons: those rows go, a link opens the screen in the private chat.
+  if (!isPrivate(chatId)) {
+    c.reply_markup.inline_keyboard = c.reply_markup.inline_keyboard.filter((r) => !r.some((x) => x.web_app));
+    if (botUser && mode === 'auto' && miniUrl(kind)) c.reply_markup.inline_keyboard.push([{ text: '✨ Открыть живой экран', url: `https://t.me/${botUser}?start=w_${kind}` }]);
+  }
   return api.sendMessage(chatId, c.text, { parse_mode: 'HTML', reply_markup: c.reply_markup, disable_notification: true, link_preview_options: { is_disabled: true } });
 }
 
@@ -311,7 +356,7 @@ export async function cardButton(chatId, msgId, cb) {
   const k = kinds()[kind];
   if (!k) return 'Этой карточки больше нет';
   let toast = 'Обновила';
-  if (action && k.actions?.[action]) { await k.actions[action](); toast = 'Остановила'; }
+  if (action && (await runAction(k, action))) toast = 'Готово';
   const data = await k.data().catch(() => '{}');
   let extra = {};
   if (kind === 'spin' && action === 'go') { const n = (JSON.parse(data).t || []).length; extra = { p: Math.floor(Math.random() * n) }; toast = '🎡 Выбрала!'; }
@@ -326,13 +371,59 @@ export async function answerQuery(q, isOwner) {
   const [kind, action] = String(q.data || '').split(':');
   const k = kinds()[kind];
   if (!isOwner || !k) return api.raw.answerWidgetQuery({ widget_query_id: q.id }).catch(() => {});
-  if (action && k.actions?.[action]) { try { await k.actions[action](); } catch (err) { addLog('error', `Виджет ${q.data}: ${err.message.slice(0, 120)}`); } }
+  if (action) { try { await runAction(k, action); } catch (err) { addLog('error', `Виджет ${q.data}: ${err.message.slice(0, 120)}`); } }
   const data = await k.data().catch((err) => { addLog('error', `Виджет ${q.data}: ${err.message.slice(0, 120)}`); return null; });
   return api.raw.answerWidgetQuery({ widget_query_id: q.id, ...(data ? { data } : {}) }).catch(() => {});
 }
 
+// «stop», «done.12»: an action of a widget with an optional argument after the dot.
+async function runAction(k, action) {
+  const [name, arg] = String(action).split('.');
+  if (!k.actions?.[name]) return false;
+  await k.actions[name](arg);
+  return true;
+}
+
+// The same request from the Mini App (src/miniapp.js; the caller has checked the owner). → data string.
+export async function miniQuery(q) {
+  const [kind, action] = String(q || '').split(':');
+  const k = kinds()[kind];
+  if (!k) throw new Error('Нет такого экрана');
+  if (action) await runAction(k, action);
+  return k.data();
+}
+export const widgetHtml = (kind) => kinds()[kind]?.html || null;
+
+// Once a day: a test widget to the owner. If Telegram took it, it is deleted at once, widgets are
+// switched on and the owner hears it once. If not, nothing is said.
+export async function probeWidgets(chatId, tell) {
+  if (widgetMode() !== 'auto' || widgetsAllowed() === true || !chatId) return null;
+  try {
+    const m = await api.raw.sendWidget({ chat_id: chatId, html: '<!doctype html><html><body>ok</body></html>', chat_data: '{}', caption: '·', disable_notification: true });
+    await api.deleteMessage(chatId, m.message_id).catch(() => {});
+    kvSet('widgets_allowed', true);
+    addLog('system', 'Telegram разрешил HTML-виджеты: переключаюсь на них');
+    await tell?.('✨ Telegram открыл виджеты, теперь они прямо в чате.');
+    return true;
+  } catch (err) {
+    if (refused(err)) kvSet('widgets_allowed', false);
+    return false;
+  }
+}
+export function startWidgetProbe(ownerId, tell) {
+  const tick = () => {
+    const day = new Date(Date.now() + LOCAL_OFFSET()).toISOString().slice(0, 10);
+    if (kvGet('widget_probe_day', '') === day) return;
+    kvSet('widget_probe_day', day);
+    probeWidgets(Number(ownerId()), tell).catch(() => {});
+  };
+  setTimeout(tick, 60000).unref();
+  setInterval(tick, 3600000).unref();
+}
+
 // The live status of a run: a widget with its own clock, edited only when the step changes.
 export async function sendProgress(chatId, state) {
+  if (widgetMode() === 'cards' || (widgetMode() === 'auto' && widgetsAllowed() === false)) throw new Error('виджеты выключены');
   const m = await api.raw.sendWidget({ chat_id: chatId, html: PROGRESS, chat_data: JSON.stringify(state), caption: `${state.e} ${state.w}…`, height: 84, disable_notification: true });
   return m.message_id;
 }
