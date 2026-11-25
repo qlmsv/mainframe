@@ -1,5 +1,5 @@
 import './_env.js';
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
 const w = await import('../src/widgets.js');
@@ -64,3 +64,6 @@ test('card buttons edit the same message; widget queries are answered only for t
   await w.answerQuery({ id: 'q2', data: 'work' }, true);
   assert.ok(JSON.parse(api.log.at(-1)[1].data).tm);
 });
+
+// Optional modules loaded by src/modules.js keep timers and sockets open.
+after(() => setTimeout(() => process.exit(0), 100).unref());
