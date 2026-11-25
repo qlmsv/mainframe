@@ -538,8 +538,10 @@ async function execute(runId, { fork = false } = {}) {
   }
   // The background work finished before the first answer went out: one message with its result,
   // without the «беру, пришлю итог» that came first.
-  if (!earlySent && later.length && status === 'done') {
-    result = later.join('\n\n');
+  // Only reports with something to say replace it: a quiet one ([[тихо]], buttons only) keeps the answer.
+  const said = later.filter((x) => String(x || '').split('\n').some((l) => l.trim() && !/^\s*\[\[.*\]\]\s*$/.test(l)));
+  if (!earlySent && said.length && status === 'done') {
+    result = said.join('\n\n');
     addEvent(runId, 'system', 'Работа закончилась быстро: один итог без промежуточного ответа');
   }
   const spend = lastUsage ? (() => {
