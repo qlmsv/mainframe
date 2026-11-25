@@ -45,17 +45,45 @@ test('deploy and test commands are recognised', () => {
   assert.equal(consentOf({ prompt: 'пока не выкладывай', origin: 'bot' }).release, false);
 });
 
-test('trusted project: release without a fresh yes, but only after tests', async () => {
-  const { config } = await import('../src/config.js');
+test('own sites release without a yes; tests are a hint once', async () => {
   const { deployHooks } = await import('../src/guards.js');
-  const saved = config.deployTrusted;
-  config.deployTrusted = /my-site/i;
-  try {
-    const branch = ['ma', 'in'].join('');
-    const push = { tool_name: 'Bash', tool_input: { command: `git push origin ${branch}` } };
-    const noYes = { consent: { release: false, noTests: false }, warnings: [] };
-    assert.equal((await deployHooks({ ...noYes, testsPassed: false }, () => {}, '/x/my-site').pre(push)).hookSpecificOutput?.permissionDecision, 'deny');
-    assert.deepEqual(await deployHooks({ ...noYes, testsPassed: true }, () => {}, '/x/my-site').pre(push), {});
-    assert.equal((await deployHooks({ ...noYes, testsPassed: true }, () => {}, '/x/other').pre(push)).hookSpecificOutput?.permissionDecision, 'deny');
-  } finally { config.deployTrusted = saved; }
+  const branch = ['ma', 'in'].join('');
+  const push = { tool_name: 'Bash', tool_input: { command: `git push origin ${branch}` } };
+  const noYes = () => ({ consent: { release: false, noTests: false, direct: true }, warnings: [] });
+  assert.deepEqual(await deployHooks({ ...noYes(), testsPassed: true }, () => {}, '/x/my-site').pre(push), {});
+  const st = { ...noYes(), testsPassed: false };
+  const h = deployHooks(st, () => {}, '/x/my-site');
+  assert.equal((await h.pre(push)).hookSpecificOutput?.permissionDecision, 'deny');
+  assert.deepEqual(await h.pre(push), {}, 'the second try goes through: no tests in the project');
+});
+
+test('the Verdict prod and history rewrite still need a direct yes', async () => {
+  const { deployHooks } = await import('../src/guards.js');
+  const branch = ['ma', 'in'].join('');
+  const verdict = { tool_name: 'Bash', tool_input: { command: `git push git@github.com:mkomov/verdeect.git abc:refs/heads/${branch}` } };
+  const force = { tool_name: 'Bash', tool_input: { command: 'git push --force origin feature' } };
+  const st = (consent) => ({ consent, testsPassed: true, warnings: [] });
+  assert.equal((await deployHooks(st({ release: false, direct: true }), () => {}, '/x').pre(verdict)).hookSpecificOutput?.permissionDecision, 'deny');
+  assert.equal((await deployHooks(st({ release: true, direct: false }), () => {}, '/x').pre(verdict)).hookSpecificOutput?.permissionDecision, 'deny', 'a task another session wrote is not his yes');
+  assert.deepEqual(await deployHooks(st({ release: true, direct: true }), () => {}, '/x').pre(verdict), {});
+  assert.equal((await deployHooks(st({ release: false, direct: true }), () => {}, '/x').pre(force)).hookSpecificOutput?.permissionDecision, 'deny');
+  assert.equal(consentOf({ prompt: 'выкладывай', origin: 'system' }).release, true);
+  assert.equal(consentOf({ prompt: 'выкладывай', origin: 'system' }).direct, false);
+});
+
+test('rm -rf: build folders and worktrees pass, roots and the mainframe do not', () => {
+  for (const c of ['rm -rf ~/Documents/Codex/wt-hotfix', 'rm -rf $OUT/_next $OUT/uslugi', 'rm -rf /home/ubuntu/.cache/x/y']) assert.deepEqual(systemRisks(c, CWD), [], c);
+  for (const c of ['rm -rf $OUT', 'rm -rf ~/Assistant', 'rm -rf /Users/kulmashev/Assistant/mainframe', 'rm -rf /Users/kulmashev/Assistant/mainframe/data/x', 'rm -rf /home/ubuntu/a/*']) assert.ok(systemRisks(c, CWD).length, c);
+});
+
+test('a needless question at the end is recognised, the five kept cases are not', async () => {
+  const { asksNeedlessly } = await import('../src/guards.js');
+  assert.equal(asksNeedlessly('Тесты прошли.\n\nВыкладываю на aipm.kai-it.pro?\n\n[[кнопки: Да, выкладывай | Сначала поправлю]]'), true);
+  assert.equal(asksNeedlessly('Готово, осталось выложить.\n\n[[кнопки: Да, выкладывай]]'), true);
+  assert.equal(asksNeedlessly('Начинаю с пунктов 1–3?'), true);
+  assert.equal(asksNeedlessly('Выложил, вот ссылка. Откат: git revert abc.'), false);
+  assert.equal(asksNeedlessly('Отправить письмо Ивану?\n\n[[кнопки: Да | Нет]]'), false);
+  assert.equal(asksNeedlessly('Выкладываю на прод Вердикта?'), false);
+  assert.equal(asksNeedlessly('Включаю рекламу с бюджетом $20?'), false);
+  assert.equal(asksNeedlessly('Какой дизайн берём: А или Б?'), false);
 });

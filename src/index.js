@@ -83,11 +83,12 @@ if (config.tg.enabled) {
   });
   content.startContent();
   startRecall();
-  // Background tasks (pult, schedule) cut off by the last stop continue by themselves, once.
-  // The owner's chat messages are not repeated: he sees the answer did not come and decides.
+  // Tasks cut off by the last stop continue by themselves, once (25.11.2026: the owner wants long
+  // work finished without «продолжай»). A chat message older than 2 hours is not repeated: he moved on.
   const RESUME = '(Мейнфрейм перезапустился посреди этой задачи. Продолжи с того места, где остановился, сделанное не повторяй. Проверь git status и файлы, прежде чем менять.)';
   for (const r of interrupted) {
-    if (!['ui', 'cron'].includes(r.origin) || String(r.prompt).startsWith(RESUME)) continue;
+    if (!['ui', 'cron', 'bot', 'system'].includes(r.origin) || String(r.prompt).startsWith(RESUME)) continue;
+    if (r.origin === 'bot' && Date.now() - (r.started_at || 0) > 2 * 3600000) continue;
     try {
       const prompt = r.status === 'queued' ? r.prompt : `${RESUME}\n\n${r.prompt}`;
       startRun({ projectId: r.project_id, prompt, origin: r.origin, inboxId: r.inbox_id });

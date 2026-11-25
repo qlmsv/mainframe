@@ -129,6 +129,10 @@ config.deployGuard = ['block', 'warn', 'off'].includes(env('DEPLOY_GUARD', 'bloc
 // Projects where the owner allowed releases without asking each time (a regex matched against the run's
 // folder and the push command, e.g. DEPLOY_TRUSTED_RE=my-site). Tests are still required there.
 config.deployTrusted = (() => { const v = env('DEPLOY_TRUSTED_RE', ''); try { return v ? new RegExp(v, 'i') : null; } catch { return null; } })();
+// Where a release still needs the owner's «да»: someone else's product (the Verdict prod).
+config.deployAsk = (() => { const v = env('DEPLOY_ASK_RE', 'verdeect|verdict|вердикт|Business AI OS'); try { return v ? new RegExp(v, 'i') : null; } catch { return null; } })();
+// An answer that ends asking for a «да» the owner gave in advance goes on by itself (AUTO_CONTINUE=0: off).
+config.autoContinue = env('AUTO_CONTINUE', '1') !== '0';
 // Work log («что сделано»): its tail goes in front of requests; WORK_LOG_AUTO=0 stops filling it from run results.
 config.workLog = { inject: flag('WORK_LOG_INJECT', true), auto: flag('WORK_LOG_AUTO', true), days: Number(env('WORK_LOG_DAYS', '7')) || 7, max: Number(env('WORK_LOG_MAX_CHARS', '1500')) || 1500 };
 // The computer's bridges (local http MCP servers from mcp.json): checked every minute, restarted over

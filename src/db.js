@@ -218,7 +218,7 @@ setInterval(pruneOld, 86400000).unref();
 // a helper script that imports this module must not mark the live mainframe's queue as stopped.
 export function recoverInterrupted() {
   // Background work cut off by a crash or restart is returned so it can be picked up again.
-  const cut = all("SELECT id, project_id, prompt, origin, inbox_id, status FROM runs WHERE status IN ('running', 'queued')");
+  const cut = all("SELECT id, project_id, prompt, origin, inbox_id, status, started_at FROM runs WHERE status IN ('running', 'queued')");
   run("UPDATE runs SET status = 'stopped', finished_at = ? WHERE status IN ('running', 'queued')", now());
   // Messages whose session was cut off go back to the owner instead of hanging "in progress".
   run("UPDATE inbox SET status = 'routed' WHERE status = 'forwarded' AND run_id IN (SELECT id FROM runs WHERE status = 'stopped')");

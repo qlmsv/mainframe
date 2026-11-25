@@ -660,6 +660,7 @@ export function startBot() {
     albums.set(group, a);
   });
 
+  const askTaps = new Map(); // answer-button taps: chat:message → time
   bot.on('callback_query:data', async (ctx) => {
     const [kind, a, b] = ctx.callbackQuery.data.split(':');
     let toast;
@@ -752,6 +753,11 @@ export function startBot() {
         const btn = (ctx.callbackQuery.message?.reply_markup?.inline_keyboard || []).flat().find((b) => b.callback_data === ctx.callbackQuery.data);
         const v = untok(a) || (btn?.text ? { text: btn.text, projectId: currentProject().id } : null);
         if (!v) throw new Error('Кнопка устарела, напиши ответ текстом');
+        // A second tap before the buttons are gone (two «Да, выкладывай» in a row): one answer only.
+        const key = `${ctx.chat?.id}:${ctx.callbackQuery.message?.message_id}`;
+        if (Date.now() - (askTaps.get(key) || 0) < 120000) { await ctx.answerCallbackQuery({ text: 'Уже принято' }).catch(() => {}); return; }
+        askTaps.set(key, Date.now());
+        for (const [k, t] of askTaps) if (Date.now() - t > 600000) askTaps.delete(k);
         await ctx.editMessageReplyMarkup().catch(() => {});
         const p = get('SELECT * FROM projects WHERE id = ?', v.projectId) || currentProject();
         const runId = startRun({ projectId: p.id, prompt: v.text, origin: 'bot' });
