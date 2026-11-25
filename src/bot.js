@@ -193,13 +193,13 @@ async function trackRun(runId, chatId, userMsgId, project) {
       addLog('error', `Статус работы: ${e.message.slice(0, 120)}`);
     }
   }
-  // Искра's sticker under the status, by state (src/stickers.js); nothing without file_ids.
+  // Vega's sticker under the status, by state (src/stickers.js); nothing without file_ids.
   t.sticker = new LiveSticker(bot.api, Number(chatId));
   t.sticker.set('thinking');
   t.timer = setInterval(() => { pushDraft(runId); t.sticker.set(runFace(runId)); }, 3000);
 }
 
-// The state Искра shows for a run: stumbled on an error, waits in the queue, works with tools, or thinks.
+// The state Vega shows for a run: stumbled on an error, waits in the queue, works with tools, or thinks.
 function runFace(runId) {
   const r = get('SELECT status FROM runs WHERE id = ?', runId);
   if (r?.status === 'queued') return 'waiting';
@@ -479,7 +479,7 @@ export function startBot() {
     const sent = ctx.message?.date;
     if (sent && Date.now() / 1000 - sent > 600) {
       const what = ctx.message.text ? `«${esc(cut(ctx.message.text, 200))}»` : 'голосовое';
-      return ctx.reply(`⏸ Пропустил старое сообщение ${what}: ${config.assistantName} была недоступна. Если ещё актуально, отправь заново.`, HTML);
+      return ctx.reply(`⏸ Пропустил старое сообщение ${what}: я был недоступен. Если ещё актуально, отправь заново.`, HTML);
     }
     return next();
   });
@@ -510,15 +510,14 @@ export function startBot() {
     : ctx.reply('Нет https-адреса для Mini App. Включи туннель (TUNNEL=cloudflared) или задай PUBLIC_URL.')));
   bot.command('status', (ctx) => showScreen(ctx, 'home'));
   bot.command('inbox', (ctx) => showScreen(ctx, 'inbox'));
-  bot.command('today', (ctx) => showScreen(ctx, 'today'));
-  for (const { kind } of widgets.widgetKinds()) {
-    bot.command(kind, async (ctx) => {
-      try {
-        const m = await widgets.sendWidget(ctx.chat.id, kind);
-        if (kind === 'board') await bot.api.pinChatMessage(ctx.chat.id, m.message_id, { disable_notification: true }).catch(() => {});
-      } catch (e) { await ctx.reply(`Виджет не открылся: ${esc(e.message.slice(0, 150))}`, HTML); }
-    });
-  }
+  // Widgets (src/widgets.js and personal modules): /today, /work, /money, /spin, /trade, /ads…
+  const openWidget = async (chatId, kind) => {
+    try {
+      const m = await widgets.sendWidget(chatId, kind);
+      if (kind === 'board' || kind === 'work') await bot.api.pinChatMessage(chatId, m.message_id, { disable_notification: true }).catch(() => {});
+    } catch (e) { await bot.api.sendMessage(chatId, `Виджет не открылся: ${esc(e.message.slice(0, 150))}`, HTML); }
+  };
+  for (const { kind } of widgets.widgetKinds()) bot.command(kind, (ctx) => openWidget(ctx.chat.id, kind));
   bot.command('projects', (ctx) => showScreen(ctx, 'sess'));
   bot.command('social', (ctx) => showScreen(ctx, 'soc'));
   bot.command('tasks', (ctx) => showScreen(ctx, 'tasks'));
@@ -680,7 +679,11 @@ export function startBot() {
     const [kind, a, b] = ctx.callbackQuery.data.split(':');
     let toast;
     try {
-      if (kind === 'n') {
+      if (kind === 'wg') {
+        toast = await widgets.cardButton(ctx.chat.id, ctx.callbackQuery.message.message_id, ctx.callbackQuery.data);
+      } else if (kind === 'wo') {
+        await openWidget(ctx.chat.id, a);
+      } else if (kind === 'n') {
         await edit(ctx, await screen(a));
       } else if (kind === 'c') {
         const item = getItem(Number(a));
@@ -952,10 +955,6 @@ export function startBot() {
   bot.api.setMyCommands([
     { command: 'menu', description: 'Пульт и меню' },
     { command: 'inbox', description: 'Входящие' },
-    { command: 'day', description: 'Карточка дня' },
-    { command: 'board', description: `Табло: что сейчас делает ${config.assistantName}` },
-    { command: 'money', description: 'Деньги: счета и траты' },
-    { command: 'today', description: 'Встречи и напоминания' },
     { command: 'projects', description: 'Сессии: куда идут команды' },
     { command: 'social', description: 'Соцсети и советы' },
     { command: 'tasks', description: 'Задачи по расписанию' },
@@ -965,15 +964,15 @@ export function startBot() {
     { command: 'app', description: 'Открыть пульт' },
     { command: 'new', description: 'Новая сессия (с передачей дел); /new Название | путь: новый проект' },
     { command: 'resume', description: 'Включить автоматику' },
-    // Widgets that optional modules bring, for example /trade.
-    ...widgets.widgetKinds().filter((k) => !['day', 'money', 'board'].includes(k.kind)).map((k) => ({ command: k.kind, description: String(k.description || k.kind).slice(0, 60) })),
+    // Widgets: built-in ones and those optional modules bring, for example /trade.
+    ...widgets.widgetKinds().filter((k) => !k.hidden).map((k) => ({ command: k.kind, description: String(k.description || k.kind).slice(0, 60) })),
   ]).catch(() => {});
   // Name and descriptions only when they changed: Telegram limits setMyName to a few calls a day.
   const nm = config.assistantName;
   const about = {
     name: nm,
     short: `${nm}: личный помощник. Пиши или говори задачу, я сделаю и расскажу.`,
-    long: `Привет! Я ${nm}, личный помощник. Пиши или говори голосом, что нужно: разберу сообщения и почту, напомню о встречах, сделаю задачу и покажу, как идут дела. Отвечаю только своему владельцу.`,
+    long: `Привет! Я ${nm}, твой личный помощник. Пиши или говори голосом, что нужно: разберу сообщения и почту, напомню о встречах, сделаю задачу и покажу, как идут дела. Отвечаю только своему владельцу.`,
   };
   if (kvGet('bot_about', '') !== JSON.stringify(about)) {
     Promise.all([

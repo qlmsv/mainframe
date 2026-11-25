@@ -8,6 +8,7 @@ import { activeRuns, isPaused } from './agent.js';
 import { tgState } from './telegram-mcp.js';
 import { mailState } from './mail.js';
 import { agenda } from './apple.js';
+import { widgetKinds } from './widgets.js';
 import { channelStats, socialState } from './social.js';
 
 // ---------- formatting ----------
@@ -132,9 +133,11 @@ export function homeScreen() {
     '<i>Пиши или говори задачу прямо сюда. Свайп по сообщению бота: ответить человеку или продолжить сессию.</i>',
   ].filter((l) => l !== '');
   const kb = new InlineKeyboard()
-    .text(`📥 Входящие${waiting ? ` · ${waiting}` : ''}`, 'n:inbox').primary().text('📅 Сегодня', 'n:today').row()
+    .text(`📥 Входящие${waiting ? ` · ${waiting}` : ''}`, 'n:inbox').primary().text('☀️ Сегодня', 'wo:today').row()
     .text('🧠 Сессии', 'n:sess').text('📊 Соцсети', 'n:soc').row()
     .text('⏰ Задачи', 'n:tasks').text('⚙️ Система', 'n:sys');
+  // Widgets, two per row: each opens a live card in the chat (src/widgets.js).
+  widgetKinds().filter((w) => w.menu).forEach((w, i) => { if (i % 2 === 0) kb.row(); kb.text(w.menu, `wo:${w.kind}`); });
   if (appUrl()) kb.row().webApp('📱 Открыть пульт', appUrl());
   return { text: lines.join('\n'), kb };
 }

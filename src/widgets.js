@@ -7,7 +7,7 @@ import { LOCAL_OFFSET, config } from './config.js';
 import { all, get, kvGet, kvSet, addLog } from './db.js';
 import { financeSummary, rates } from './finance.js';
 import { agenda } from './apple.js';
-import { activeRuns } from './agent.js';
+import { activeRuns, stopAll } from './agent.js';
 import { moduleWidgets, modules } from './modules.js';
 
 // ---------- shared look ----------
@@ -142,31 +142,161 @@ export async function boardData() {
   });
 }
 
+// ---------- 6. «Сегодня»: встречи, кто ждёт ответа, дела ----------
+const NAME = config.assistantName.replace(/['\\<"]/g, '');
+const TODAY = page('', `const SPK=${JSON.stringify(SPARK(34, 'st'))};const L=(t,a)=>a&&a.length?'<div class="m" style="margin-top:8px">'+t+'</div>'+a.map(x=>'<div class="l fade nw">'+x+'</div>').join(''):'';
+function render(d){const w=document.getElementById('w');w.innerHTML='<div class="row">'+SPK.replace('class="spk"','class="spk '+((d.ne||0)+(d.wi||0)?'working':'done')+'"')+'<div class="sp"><div class="m">'+(d.dt||'')+'</div><div class="b">'+(d.h||'Сегодня')+'</div></div><button class="btn" onclick="pull()">↻</button></div>'
++'<div class="row" style="margin:8px 0">'+[['Встречи',d.ne],['Ждут ответа',d.wi],['Дела',(d.rm||[]).length]].map(x=>'<div class="tile"><span class="m">'+x[0]+'</span><b>'+(x[1]??0)+'</b></div>').join('')+'</div>'
++L('Встречи',(d.ev||[]).map(e=>'<span class="b">'+e[0]+'</span> '+e[1]))+L('Ждут ответа',(d.wn||[]).map(x=>'💬 '+x))+L('Дела',(d.rm||[]).map(x=>'⚪️ '+x))
++(d.x||[]).map(x=>'<div class="m" style="margin-top:6px">'+x+'</div>').join('')+(!(d.ne||d.wi||(d.rm||[]).length)?'<div class="m" style="margin-top:6px">Свободный день. Можно выдохнуть 🌿</div>':'')}`, 'today', 300);
+
+const waitingRows = () => all("SELECT name, username, text FROM inbox WHERE status IN ('new','routed') ORDER BY id DESC LIMIT 4");
+export async function todayData() {
+  const d = new Date(Date.now() + LOCAL_OFFSET());
+  const dt = d.toLocaleDateString('ru', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+  const hr = d.getUTCHours();
+  let ev = [], rm = [], ne = 0;
+  try {
+    const a = await agenda();
+    const today = new Date().toDateString();
+    const evs = a.events.filter((e) => e.start && new Date(e.start).toDateString() === today);
+    ne = evs.length;
+    ev = evs.slice(0, 4).map((e) => [e.time || 'весь день', cut(e.title, 30)]);
+    rm = a.reminders.slice(0, 4).map((r) => cut(r.title, 34));
+  } catch { /* the Mac is off: no calendar */ }
+  const wi = get("SELECT COUNT(*) n FROM inbox WHERE status IN ('new','routed')").n;
+  const wn = waitingRows().slice(0, 3).map((r) => cut(r.name || r.username || 'кто-то', 18) + ': ' + cut(String(r.text || '').replace(/\s+/g, ' '), 26));
+  const x = modules.map((m) => { try { return m.dayLine?.() || null; } catch { return null; } }).filter(Boolean).map((t) => cut(t, 60));
+  return fit({ dt, h: hr < 12 ? 'Доброе утро' : hr < 18 ? 'Добрый день' : 'Добрый вечер', ne, wi, ev, wn, rm, x });
+}
+
+// ---------- 7. «В работе»: что Vega делает сейчас, с кнопкой «Стоп» ----------
+const WORK = page('', `const SPK=${JSON.stringify(SPARK(44, 'sw'))};function render(d){const w=document.getElementById('w');const n=(d.r||[]).length;w.innerHTML='<div class="row">'+SPK.replace('class="spk"','class="spk '+(d.st?'waiting':n?'working':'done')+'"')+'<div class="sp"><div class="b">'+(d.st?'${NAME} на паузе':n?'${NAME} работает':'${NAME} отдыхает')+'</div><div class="m">'+(n?'дел сейчас: '+n:'новых дел нет')+(d.q?' · в очереди '+d.q:'')+'</div></div><span class="m">'+(d.tm||'')+'</span></div>'
++'<div class="row" style="margin:8px 0">'+[['Сейчас',n],['Ждут тебя',d.i],['Сделано',d.d]].map(x=>'<div class="tile"><span class="m">'+x[0]+'</span><b>'+(x[1]??0)+'</b></div>').join('')+'</div>'
++(d.r||[]).map(r=>'<div class="row l fade"><span>'+(r[2]?'⏰':'⚙️')+'</span><span class="sp nw">'+r[0]+'</span><span class="m">'+r[1]+' мин</span></div>').join('')
++'<div class="row" style="margin-top:8px"><span class="m sp">'+(d.mac?'🟢':'🔴')+' Mac '+(d.cl?'🟢':'🔴')+' Claude</span>'+(n&&!d.st?'<button class="btn r" onclick="stop(this)">⏹ Стоп</button>':'')+'</div>'}
+function stop(b){b.disabled=true;b.textContent='Останавливаю…';W.request('work:stop').then(a=>{if(a&&a.result){D=JSON.parse(a.result);draw()}W.HapticFeedback&&W.HapticFeedback.notificationOccurred('success')},()=>{b.disabled=false;b.textContent='⏹ Стоп'})}`, 'work', 10);
+
+export async function workData() {
+  const ids = activeRuns();
+  const r = ids.map((id) => get('SELECT r.prompt, r.origin, r.started_at, p.name FROM runs r JOIN projects p ON p.id=r.project_id WHERE r.id=?', id)).filter(Boolean)
+    .slice(0, 4).map((x) => [cut(`${x.name}: ${String(x.prompt).replace(/^\[[^\]]*\]\s*/, '').replace(/\s+/g, ' ')}`, 44), Math.max(0, Math.round((Date.now() - (x.started_at || Date.now())) / 60000)), x.origin === 'cron' ? 1 : 0]);
+  const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+  return fit({
+    tm: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }), r,
+    q: get("SELECT COUNT(*) n FROM runs WHERE status='queued'").n,
+    i: get("SELECT COUNT(*) n FROM inbox WHERE status IN ('new','routed')").n,
+    d: get("SELECT COUNT(*) n FROM runs WHERE started_at >= ? AND status='done'", d0.getTime()).n,
+    st: kvGet('paused', false) ? 1 : 0, mac: await portUp(2222), cl: !kvGet('auth_error', null),
+  });
+}
+
+// ---------- 8. Рулетка «Что сделать первым» ----------
+const SPIN = page('', `const C=['#ff7a45','#21a366','#4c8dff','#e5484d','#f5b301','#9b6bff','#14b8a6','#ec4899'];const SPK=${JSON.stringify(SPARK(36, 'sr'))};let A=0,P=-1;
+function render(d){const w=document.getElementById('w');const t=d.t||[];const n=t.length;if(!n){w.innerHTML='<div class="row">'+SPK.replace('class="spk"','class="spk done"')+'<div class="b sp">На сегодня дел нет. Отдыхай!</div></div>';return}
+const s=360/n;w.innerHTML='<div class="row">'+SPK.replace('class="spk"','class="spk thinking" ')+'<div class="sp"><div class="b">Что сделать первым?</div><div class="m">Крути, ${NAME} выберет</div></div></div>'
++'<div class="row" style="margin:10px 0;justify-content:center"><div style="position:relative;width:170px;height:170px"><div style="position:absolute;left:77px;top:-6px;z-index:2;font-size:18px">▼</div><div id="wh" style="width:170px;height:170px;border-radius:50%;background:conic-gradient('+t.map((x,i)=>C[i%8]+' '+i*s+'deg '+(i+1)*s+'deg').join(',')+');transition:transform 3s cubic-bezier(.2,.8,.1,1);transform:rotate('+A+'deg)">'
++t.map((x,i)=>'<b style="position:absolute;left:78px;top:6px;width:14px;text-align:center;color:#fff;transform-origin:7px 79px;transform:rotate('+(i*s+s/2)+'deg)">'+(i+1)+'</b>').join('')+'</div></div></div>'
++'<div id="res" class="b" style="text-align:center;min-height:20px">'+(P>=0?'👉 '+t[P]:'')+'</div>'
++t.map((x,i)=>'<div class="l nw" style="'+(i===P?'font-weight:700':'')+'"><span style="color:'+C[i%8]+'">●</span> '+(i+1)+'. '+x+'</div>').join('')
++'<div class="row" style="margin-top:8px"><button class="btn sp" id="go" onclick="spin()">🎡 Крутить!</button><button class="btn" onclick="pull()">↻</button></div>'}
+function spin(){const t=D.t||[];if(!t.length)return;const n=t.length,s=360/n;const k=Math.floor(Math.random()*n);A+=1440+(360-(k*s+s/2))-(A%360);P=-1;draw();document.getElementById('go').disabled=true;
+requestAnimationFrame(()=>{document.getElementById('wh').style.transform='rotate('+A+'deg)'});setTimeout(()=>{P=k;draw();W.HapticFeedback&&W.HapticFeedback.notificationOccurred('success')},3100)}`, 'spin', 600);
+
+export async function spinData() {
+  const t = [];
+  try { (await agenda()).reminders.slice(0, 6).forEach((r) => t.push(cut(r.title, 26))); } catch { /* no Mac */ }
+  for (const r of waitingRows()) if (t.length < 8) t.push(cut(`Ответить: ${r.name || r.username || 'кто-то'}`, 26));
+  return fit({ t: t.slice(0, 8) });
+}
+
+// ---------- cards: the same widgets as ordinary messages, for apps or bots without HTML widgets ----------
+const e = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const CARDS = {
+  today: (d) => [`☀️ <b>${e(d.h)}</b> · ${e(d.dt)}`, `📅 ${d.ne || 0} встреч · 💬 ждут ${d.wi || 0} · ⚪️ дел ${(d.rm || []).length}`,
+    ...(d.ev || []).map((x) => `<b>${e(x[0])}</b> ${e(x[1])}`), ...(d.wn || []).map((x) => `💬 ${e(x)}`), ...(d.rm || []).map((x) => `⚪️ ${e(x)}`), ...(d.x || []).map((x) => `<i>${e(x)}</i>`)].join('\n'),
+  work: (d) => [`${(d.r || []).length ? '⚡' : '😴'} <b>${NAME} ${d.st ? 'на паузе' : (d.r || []).length ? 'работает' : 'отдыхает'}</b> · ${e(d.tm)}`,
+    `Сейчас ${(d.r || []).length} · ждут тебя ${d.i || 0} · сделано ${d.d || 0}${d.q ? ` · в очереди ${d.q}` : ''}`, ...(d.r || []).map((r) => `${r[2] ? '⏰' : '⚙️'} ${e(r[0])} · ${r[1]} мин`)].join('\n'),
+  money: (d) => [`💳 <b>Всего: ${e(d.tot)}</b>`, `Траты: сегодня ${e(d.td)} · 7 дней ${e(d.wk)} · месяц ${e(d.mo)}`, ...(d.c || []).map((c) => `• ${e(c[0])}: ${e(c[2])}`)].join('\n'),
+  spin: (d) => ((d.t || []).length ? [`🎡 <b>Что сделать первым?</b>`, ...(d.t || []).map((x, i) => `${i === d.p ? '👉 <b>' : ''}${i + 1}. ${e(x)}${i === d.p ? '</b>' : ''}`)].join('\n') : '🎡 На сегодня дел нет. Отдыхай!'),
+};
+CARDS.day = CARDS.today; CARDS.board = CARDS.work;
+
 // ---------- sending and answering ----------
+// WIDGETS in .env: auto (HTML widget, a card if Telegram refuses), html (widgets only), cards (cards only).
+export const widgetMode = () => { const m = String(process.env.WIDGETS || 'auto').toLowerCase(); return ['html', 'cards'].includes(m) ? m : 'auto'; };
 const KINDS = {
-  day: { html: DAY, data: dayData, caption: '☀️ Карточка дня', h: 0 },
-  money: { html: MONEY, data: moneyData, caption: '💳 Деньги', h: 0 },
-  board: { html: BOARD, data: boardData, caption: `🧠 ${config.assistantName} сейчас`, h: 0 },
+  today: { html: TODAY, data: todayData, caption: '☀️ Сегодня', description: 'Сегодня: встречи, дела, кто ждёт ответа' },
+  work: { html: WORK, data: workData, caption: `⚡ ${NAME} в работе`, description: `В работе: что делает ${NAME}, кнопка «Стоп»`, menu: '⚡ В работе', actions: { stop: () => stopAll() } },
+  money: { html: MONEY, data: moneyData, caption: '💳 Деньги', description: 'Деньги: остатки и траты', menu: '💳 Деньги' },
+  spin: { html: SPIN, data: spinData, caption: '🎡 Что сделать первым', description: 'Рулетка: что сделать первым', menu: '🎡 Рулетка' },
+  // Old names, kept for the commands people already know.
+  day: { html: TODAY, data: todayData, caption: '☀️ Сегодня', hidden: true },
+  board: { html: WORK, data: workData, caption: `⚡ ${NAME} в работе`, hidden: true, actions: { stop: () => stopAll() } },
 };
 
-export const _html = { DAY, MONEY, BOARD };
+export const _html = { DAY, MONEY, BOARD, TODAY, WORK, SPIN };
+export const _data = { todayData, workData, spinData, moneyData };
 // Built-in widgets plus the ones optional modules bring (/kind commands in the bot).
 const kinds = () => ({ ...KINDS, ...moduleWidgets() });
-export const widgetKinds = () => Object.entries(kinds()).map(([kind, k]) => ({ kind, description: k.description || k.caption }));
+export const widgetKinds = () => Object.entries(kinds()).map(([kind, k]) => ({ kind, description: k.description || k.caption, menu: k.menu || null, hidden: !!k.hidden }));
 let api = null; // grammy bot.api, set by the bot
 export const setWidgetApi = (a) => { api = a; };
+let htmlRefusedAt = 0; // auto mode: after Telegram refused a widget, cards for 10 minutes
+
+// A card: the same data as a message with buttons, edited in place by the buttons.
+export function cardOf(kind, dataStr, extra = {}) {
+  const k = kinds()[kind];
+  let d = {}; try { d = { ...JSON.parse(dataStr || '{}'), ...extra }; } catch { /* empty card */ }
+  const draw = k.card || CARDS[kind];
+  const text = draw ? draw(d) : `${k.caption}\n<i>Открой в пульте, чтобы увидеть всё.</i>`;
+  const rows = [[{ text: '↻ Обновить', callback_data: `wg:${kind}` }]];
+  if (kind === 'spin' && (d.t || []).length) rows[0].unshift({ text: '🎡 Крутить!', callback_data: 'wg:spin:go' });
+  if ((kind === 'work' || kind === 'board') && (d.r || []).length && !d.st) rows[0].push({ text: '⏹ Стоп', callback_data: `wg:${kind}:stop` });
+  if (config.publicUrl?.startsWith('https://')) rows.push([{ text: '📱 Открыть в пульте', web_app: { url: config.publicUrl } }]);
+  return { text: text.slice(0, 4000), reply_markup: { inline_keyboard: rows } };
+}
 
 export async function sendWidget(chatId, kind) {
   const k = kinds()[kind];
   const data = await k.data().catch(() => '{}');
-  const m = await api.raw.sendWidget({ chat_id: chatId, html: k.html, chat_data: data, caption: k.caption, allow_queries: true, disable_notification: true });
-  return m;
+  const mode = widgetMode();
+  if (mode === 'html' || (mode === 'auto' && Date.now() - htmlRefusedAt > 600000)) {
+    try {
+      return await api.raw.sendWidget({ chat_id: chatId, html: k.html, chat_data: data, caption: k.caption, allow_queries: true, disable_notification: true });
+    } catch (err) {
+      if (mode === 'html') throw err;
+      htmlRefusedAt = Date.now();
+      addLog('error', `Виджет ${kind} не ушёл, шлю карточку: ${err.message.slice(0, 120)}`);
+    }
+  }
+  const c = cardOf(kind, data);
+  return api.sendMessage(chatId, c.text, { parse_mode: 'HTML', reply_markup: c.reply_markup, disable_notification: true, link_preview_options: { is_disabled: true } });
 }
 
+// A card's button: wg:<kind>[:<action>]. Returns the toast text.
+export async function cardButton(chatId, msgId, cb) {
+  const [, kind, action] = cb.split(':');
+  const k = kinds()[kind];
+  if (!k) return 'Этой карточки больше нет';
+  let toast = 'Обновила';
+  if (action && k.actions?.[action]) { await k.actions[action](); toast = 'Остановила'; }
+  const data = await k.data().catch(() => '{}');
+  let extra = {};
+  if (kind === 'spin' && action === 'go') { const n = (JSON.parse(data).t || []).length; extra = { p: Math.floor(Math.random() * n) }; toast = '🎡 Выбрала!'; }
+  const c = cardOf(kind, data, extra);
+  await api.editMessageText(chatId, msgId, c.text, { parse_mode: 'HTML', reply_markup: c.reply_markup, link_preview_options: { is_disabled: true } })
+    .catch((err) => { if (!/not modified/i.test(err.message)) throw err; });
+  return toast;
+}
+
+// A widget's request: "<kind>" for fresh data, "<kind>:<action>" for a button (only the owner).
 export async function answerQuery(q, isOwner) {
-  const k = kinds()[String(q.data || '').split(':')[0]];
+  const [kind, action] = String(q.data || '').split(':');
+  const k = kinds()[kind];
   if (!isOwner || !k) return api.raw.answerWidgetQuery({ widget_query_id: q.id }).catch(() => {});
-  const data = await k.data().catch((e) => { addLog('error', `Виджет ${q.data}: ${e.message.slice(0, 120)}`); return null; });
+  if (action && k.actions?.[action]) { try { await k.actions[action](); } catch (err) { addLog('error', `Виджет ${q.data}: ${err.message.slice(0, 120)}`); } }
+  const data = await k.data().catch((err) => { addLog('error', `Виджет ${q.data}: ${err.message.slice(0, 120)}`); return null; });
   return api.raw.answerWidgetQuery({ widget_query_id: q.id, ...(data ? { data } : {}) }).catch(() => {});
 }
 
