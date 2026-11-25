@@ -24,28 +24,26 @@ body{margin:0;font:14px/1.35 -apple-system,system-ui,sans-serif;color:var(--t)}
 .fade{animation:f .4s ease both}@keyframes f{from{opacity:0;transform:translateY(4px)}}`;
 
 
-// The assistant's face (same drop as public/spark.js), for widgets: plain SVG, state by class.
+// The assistant's face (the Vega star of public/spark.js), for widgets: plain SVG, state by class.
 const SPARK_CSS = `.spk{flex:none;overflow:visible}.spk *{transform-box:fill-box;transform-origin:center}
-.spk .bz{transform-box:view-box;transform-origin:50% 88%;animation:sb 3.4s ease-in-out infinite}@keyframes sb{50%{transform:scale(1.03,.98)}}
-.spk .gl{animation:sg 3.4s ease-in-out infinite}@keyframes sg{50%{opacity:.55;transform:scale(1.06)}}
-.spk .fx,.spk .hp{opacity:0;transition:opacity .3s}.spk .ey{transition:opacity .2s}
-.spk.thinking .ft,.spk.working .fw,.spk.done .hp,.spk.done .fd,.spk.waiting .fr,.spk.error .fe{opacity:1}.spk.done .ey{opacity:0}
+.spk .bz,.spk .ob{transform-box:view-box;transform-origin:50px 50px}.spk .bz{animation:sb 3.4s ease-in-out infinite}@keyframes sb{50%{transform:scale(.94)}}
+.spk .gl{animation:sg 3.4s ease-in-out infinite}@keyframes sg{50%{opacity:.55;transform:scale(1.08)}}
+.spk .fx{opacity:0;transition:opacity .3s}
+.spk.thinking .ft,.spk.working .fw,.spk.done .fd,.spk.waiting .fr,.spk.error .fe{opacity:1}
 .spk .ft circle{animation:sd 1.1s infinite}.spk .ft circle:nth-child(2){animation-delay:.15s}.spk .ft circle:nth-child(3){animation-delay:.3s}@keyframes sd{50%{transform:translateY(-3px);opacity:.35}}
-.spk .ob{transform-box:view-box;transform-origin:50px 58px;animation:so 2.2s linear infinite}@keyframes so{to{transform:rotate(360deg)}}
-.spk.working .bz{animation:sw .9s ease-in-out infinite}@keyframes sw{50%{transform:translateY(-2px) rotate(-2deg)}}
-.spk.error .cr{filter:saturate(.35)}.spk.error .bz{transform:rotate(-8deg);animation:none}
-.spk .rg{animation:sr 1.6s ease-out infinite}@keyframes sr{0%{transform:scale(.7);opacity:.7}100%{transform:scale(1.35);opacity:0}}
-.spk .ey ellipse{animation:bl 4.5s infinite}@keyframes bl{0%,96%,100%{transform:scaleY(1)}98%{transform:scaleY(.12)}}`;
-const SPARK = (size, id = 'spk') => `<svg id="${id}" class="spk" width="${size}" height="${size}" viewBox="0 0 100 100"><defs><radialGradient id="${id}a" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#fff6ee"/><stop offset=".45" stop-color="#fbe6da"/><stop offset="1" stop-color="#e2602b"/></radialGradient><radialGradient id="${id}b"><stop offset=".55" stop-color="#e2602b" stop-opacity=".35"/><stop offset="1" stop-color="#e2602b" stop-opacity="0"/></radialGradient></defs>
-<circle class="gl" cx="50" cy="56" r="44" fill="url(#${id}b)"/><circle class="fx fr rg" cx="50" cy="58" r="30" fill="none" stroke="#e2602b" stroke-width="3"/>
-<g class="bz"><path class="cr" d="M50 20q22 22 22 38a22 22 0 0 1-44 0q0-16 22-38z" fill="url(#${id}a)"/><path d="M38 50q2-8 8-12" stroke="#fff" stroke-width="3" stroke-linecap="round" fill="none" opacity=".7"/>
-<g class="ey"><ellipse cx="43" cy="60" rx="3.8" ry="5.2" fill="#141414"/><ellipse cx="57" cy="60" rx="3.8" ry="5.2" fill="#141414"/></g>
-<g class="hp" stroke="#141414" stroke-width="3.2" stroke-linecap="round" fill="none"><path d="M38.5 62q4.5-6 9 0"/><path d="M52.5 62q4.5-6 9 0"/></g>
-<path d="M47 69q3 2.5 6 0" stroke="#141414" stroke-width="2.2" stroke-linecap="round" fill="none"/></g>
-<g class="fx ft" fill="#8a8f98"><circle cx="68" cy="22" r="3.2"/><circle cx="76" cy="22" r="3.2"/><circle cx="84" cy="22" r="3.2"/></g>
-<g class="fx fw"><g class="ob"><circle cx="50" cy="20" r="3.6" fill="#e2602b"/><circle cx="83" cy="66" r="3" fill="#21a366"/><circle cx="18" cy="70" r="2.6" fill="#e2602b"/></g></g>
-<g class="fx fd" fill="#e2602b"><path d="M14 26l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/><path d="M86 22l1.6 4 4 1.6-4 1.6-1.6 4-1.6-4-4-1.6 4-1.6z"/></g>
-<text class="fx fe" x="70" y="30" font-family="system-ui" font-weight="800" font-size="22" fill="#e2602b">?</text></svg>`;
+.spk.thinking .bz{animation:st 2.4s ease-in-out infinite}@keyframes st{50%{transform:rotate(45deg) scale(.9)}100%{transform:rotate(90deg)}}
+.spk .ob{animation:so 2.2s linear infinite}@keyframes so{to{transform:rotate(360deg)}}
+.spk.working .bz{animation:sw 1s linear infinite}@keyframes sw{50%{transform:rotate(45deg) scale(1.08)}100%{transform:rotate(90deg)}}
+.spk.done .bz{animation:sp 1.2s cubic-bezier(.3,.7,.3,1) 2}@keyframes sp{20%{transform:scale(.82)}42%{transform:scale(1.16)}}
+.spk.error .cr{filter:saturate(.3) brightness(.85)}.spk.error .bz{transform:rotate(-10deg) scale(.86);animation:none}
+.spk .rg{animation:sr 1.6s ease-out infinite}@keyframes sr{0%{transform:scale(.5);opacity:.8}100%{transform:scale(1.35);opacity:0}}`;
+const SPARK = (size, id = 'spk') => `<svg id="${id}" class="spk" width="${size}" height="${size}" viewBox="0 0 100 100"><defs><radialGradient id="${id}b"><stop offset="0" stop-color="#e2602b" stop-opacity=".55"/><stop offset=".5" stop-color="#e2602b" stop-opacity=".16"/><stop offset="1" stop-color="#e2602b" stop-opacity="0"/></radialGradient><radialGradient id="${id}a"><stop offset="0" stop-color="#fff"/><stop offset=".35" stop-color="#fff1e6"/><stop offset="1" stop-color="#f08a55"/></radialGradient></defs>
+<circle class="gl" cx="50" cy="50" r="46" fill="url(#${id}b)"/><circle class="fx fr rg" cx="50" cy="50" r="34" fill="none" stroke="#e2602b" stroke-width="3"/>
+<g class="bz"><path d="M50 25 52.8 47.2 75 50 52.8 52.8 50 75 47.2 52.8 25 50 47.2 47.2z" fill="#f6a77c" opacity=".6" transform="rotate(45 50 50)"/><path class="cr" d="M50 10C52 38 55 45 90 50C55 55 52 62 50 90C48 62 45 55 10 50C45 45 48 38 50 10z" fill="url(#${id}a)"/><circle cx="50" cy="50" r="7" fill="#fff"/></g>
+<g class="fx ft" fill="#f6a77c"><circle cx="72" cy="14" r="3.6"/><circle cx="81" cy="14" r="3.6"/><circle cx="90" cy="14" r="3.6"/></g>
+<g class="fx fw"><g class="ob"><circle cx="50" cy="3" r="4" fill="#ffb020"/><circle cx="93" cy="62" r="3.4" fill="#21a366"/><circle cx="9" cy="72" r="3" fill="#e2602b"/></g></g>
+<g class="fx fd"><path d="M10 12l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="#ffb020"/><path d="M88 8l1.6 4 4 1.6-4 1.6-1.6 4-1.6-4-4-1.6 4-1.6z" fill="#21a366"/></g>
+<text class="fx fe" x="74" y="22" font-family="system-ui" font-weight="800" font-size="22" fill="#e5484d">?</text></svg>`;
 
 // Live data: render(d) draws; on open and every `every` seconds the widget asks the bot for kind.
 export const page = (body, render, kind, every) => `<!doctype html><html><head><style>${CSS}${SPARK_CSS}</style></head><body><div class="w" id="w">${body}</div><script>
