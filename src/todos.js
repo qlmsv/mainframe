@@ -18,6 +18,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS todos (
 db.exec('CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status)');
 
 export const STATUSES = { today: 'Сегодня', inbox: 'Входящие', week: 'На неделе', waiting: 'Ждёт ответа', done: 'Готово' };
+export const STATUS_LABEL = STATUSES;
+export const TODO_STATUSES = ['today', 'week', 'waiting', 'inbox', 'done'];
 export const WHO = { owner: 'я', assistant: 'помощник' };
 const ORDER = "CASE status WHEN 'today' THEN 0 WHEN 'inbox' THEN 1 WHEN 'week' THEN 2 WHEN 'waiting' THEN 3 ELSE 4 END";
 
@@ -41,7 +43,10 @@ function clean(p, partial = false) {
     out.who = p.who;
   }
   if (p.due !== undefined) {
-    const d = p.due ? String(p.due).trim() : null;
+    let d = p.due ? String(p.due).trim() : null;
+    // Words the owner uses: «сегодня», «завтра», «послезавтра».
+    const shift = { сегодня: 0, today: 0, завтра: 1, tomorrow: 1, послезавтра: 2 }[String(d || '').toLowerCase()];
+    if (shift !== undefined) d = new Date(Date.now() + shift * 86400000).toLocaleDateString('sv');
     if (d && Number.isNaN(Date.parse(d))) throw new Error('Срок: дата вида 2026-11-26 или 2026-11-26T14:00');
     out.due = d || null;
   }
@@ -51,11 +56,16 @@ function clean(p, partial = false) {
 
 export function addTodo(p) {
   const c = clean(p);
+  // The same open task written twice (a repeated message, a retry): keep the first one.
+  // (SQLite lower() knows only Latin letters, so the comparison is here.)
+  const key = c.title.toLowerCase().replace(/\s+/g, ' ');
+  const same = all("SELECT * FROM todos WHERE status != 'done'").find((x) => x.title.toLowerCase().replace(/\s+/g, ' ') === key);
+  if (same) return { ...same, added: false };
   const r = run('INSERT INTO todos (title, notes, status, who, due, created_at, done_at, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     c.title, c.notes ?? null, c.status || 'inbox', c.who || 'owner', c.due ?? null, Number(p.created_at) || Date.now(),
     c.status === 'done' ? (Number(p.done_at) || Date.now()) : null, c.source ?? 'chat');
   bus.change('todos');
-  return getTodo(Number(r.lastInsertRowid));
+  return { ...getTodo(Number(r.lastInsertRowid)), added: true };
 }
 
 export const getTodo = (id) => get('SELECT * FROM todos WHERE id = ?', Number(id)) || null;
@@ -63,6 +73,7 @@ export const getTodo = (id) => get('SELECT * FROM todos WHERE id = ?', Number(id
 export function listTodos({ status, who, done = false, limit = 200 } = {}) {
   const where = []; const args = [];
   if (status) { where.push('status = ?'); args.push(status); } else if (!done) where.push("status != 'done'");
+  else { where.push("(status != 'done' OR done_at > ?)"); args.push(Date.now() - 7 * 86400000); }
   if (who) { where.push('who = ?'); args.push(who); }
   // Done ones: the latest first; open ones: by column, then the nearest due date, then the oldest.
   const order = status === 'done' || (done && !status) ? `${ORDER}, done_at DESC` : `${ORDER}, due IS NULL, due, id`;
@@ -104,7 +115,8 @@ export function topTodos(n = 3) {
 
 export function todoCounts() {
   const c = Object.fromEntries(Object.keys(STATUSES).map((k) => [k, 0]));
-  for (const r of all('SELECT status, COUNT(*) n FROM todos GROUP BY status')) c[r.status] = r.n;
+  for (const r of all("SELECT status, COUNT(*) n FROM todos WHERE status != 'done' GROUP BY status")) c[r.status] = r.n;
+  c.done = get("SELECT COUNT(*) n FROM todos WHERE status = 'done' AND done_at > ?", Date.now() - 7 * 86400000).n;
   const day = todayStr();
   c.overdue = listTodos().filter((t) => t.status !== 'waiting' && overdue(t, day) && t.due.slice(0, 10) < day).length;
   return c;
