@@ -386,7 +386,7 @@ function renderShell() {
   const nav = VIEWS.filter((v) => !v.mobileOnly).map((v) => `<button class="${S.view === v.id ? 'active' : ''}" data-nav="${v.id}">${icon(v.icon)}<span>${v.title}</span>${c[v.id] ? `<span class="count">${c[v.id]}</span>` : ''}</button>`).join('');
   $('#nav').innerHTML = nav;
   $('#tabbar').innerHTML = VIEWS.filter((v) => v.tab).map((v) => `<button class="${S.view === v.id || (v.id === 'more' && MORE_VIEWS.includes(S.view)) ? 'active' : ''}" data-nav="${v.id}">${icon(v.icon)}<span>${v.title}</span>${c[v.id] ? `<span class="count">${c[v.id]}</span>` : ''}</button>`).join('');
-  $('#top-title').textContent = VIEWS.find((v) => v.id === S.view)?.title || 'Мейнфрейм';
+  $('#top-title').textContent = VIEWS.find((v) => v.id === S.view)?.title || document.title;
   const paused = Boolean(S.state?.paused);
   // No stop buttons: the top button only appears to switch automation back on after a pause.
   $('#top-stop').innerHTML = `${icon('play')}<span>Включить</span>`;
@@ -1453,7 +1453,7 @@ const PRESETS = [
 
 function viewTasks() {
   const tasks = S.data.tasks || [];
-  const head = `<div class="page-head"><div><h1>Задачи по расписанию</h1><p>Мейнфрейм сам запускает их в нужной сессии и присылает итог в бот.</p></div><button class="btn primary" data-action="new-task">${icon('plus')}Задача</button></div>`;
+  const head = `<div class="page-head"><div><h1>Задачи по расписанию</h1><p>${esc(document.title)} сама запускает их в нужной сессии и присылает итог в бот.</p></div><button class="btn primary" data-action="new-task">${icon('plus')}Задача</button></div>`;
   if (!tasks.length) return `${head}<div class="card"><div class="empty"><div class="em-face"><mf-spark size="56"></mf-spark></div><div class="em-title">Задач пока нет</div>Например: каждое утро сводка по календарю и почте, по пятницам разбор заметок.<div style="margin-top:14px"><button class="btn primary" data-action="new-task">Создать задачу</button></div></div></div>`;
   const projects = S.data.projects || [];
   const nextT = tasks.filter((t) => t.enabled && t.next_run).sort((a, b) => a.next_run - b.next_run)[0];
@@ -1468,7 +1468,7 @@ function viewTasks() {
   });
   return `${head}${top}<div class="card raised list">${tasks.map((t) => `<div class="li">
     <button class="switch ${t.enabled ? 'on' : ''}" data-action="toggle-task" data-id="${t.id}" aria-label="Включить или выключить"></button>
-    <div class="li-main"><div class="li-title">${esc(t.name)}</div><div class="li-sub">${esc(cronHuman(t.cron))} · ${esc(projects.find((p) => p.id === t.project_id)?.name || 'Мейнфрейм')}${t.enabled && t.next_run ? ` · следующий ${when(t.next_run)}` : ''}${t.last_status ? ` · прошлый: ${t.last_status === 'done' ? 'ок' : t.last_status}` : ''}</div></div>
+    <div class="li-main"><div class="li-title">${esc(t.name)}</div><div class="li-sub">${esc(cronHuman(t.cron))} · ${esc(projects.find((p) => p.id === t.project_id)?.name || document.title)}${t.enabled && t.next_run ? ` · следующий ${when(t.next_run)}` : ''}${t.last_status ? ` · прошлый: ${t.last_status === 'done' ? 'ок' : t.last_status}` : ''}</div></div>
     <button class="btn small" data-action="run-task" data-id="${t.id}">${icon('play')}Сейчас</button>
     <button class="btn small ghost" data-action="edit-task" data-id="${t.id}">${icon('edit')}</button>
     <button class="btn small ghost danger" data-action="delete-task" data-id="${t.id}" aria-label="Удалить">${icon('trash')}</button>
@@ -1538,7 +1538,7 @@ function viewSystem() {
       <div class="muted">${esc(tgText)}</div></div>
 
     <div class="card raised"><div class="stat-title"><span class="dot ${st.tunnel.url ? 'ok' : ''}"></span>Mini App и телефон</div>
-      <div class="muted">${st.tunnel.url ? 'Доступен по https. В боте есть кнопка «Мейнфрейм».' : 'Нет https-адреса. Нужен cloudflared или PUBLIC_URL.'}</div>
+      <div class="muted">${st.tunnel.url ? 'Доступен по https. В боте есть кнопка пульта.' : 'Нет https-адреса. Нужен cloudflared или PUBLIC_URL.'}</div>
       ${st.dashboardLink ? `<div class="copy-line"><span class="kbd">${esc(st.dashboardLink)}</span><button class="btn small" data-copy="${esc(st.dashboardLink)}">${icon('copy')}</button></div><div class="faint" style="margin-top:6px">Личная ссылка для браузера на телефоне. Никому не отправляй.</div>` : ''}</div>
 
     <div class="card raised"><div class="stat-title"><span class="dot ${st.voice?.status === 'running' ? 'ok' : st.voice?.status === 'off' ? '' : 'bad'}"></span>Голосовые</div>
