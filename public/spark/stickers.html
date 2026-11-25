@@ -1,99 +1,80 @@
 <!doctype html>
-<!-- Искра for Telegram video stickers: the same drop as public/spark.js, one state per page (?s=thinking).
+<!-- Vega for Telegram video stickers: the same star as public/spark.js, one state per page (?s=thinking).
      Every animation loops in 2 s, so scripts/spark-stickers.mjs can pause it at any time and take a frame. -->
 <html><head><meta charset="utf-8"><style>
 html, body { margin: 0; background: transparent; }
 svg { width: 512px; height: 512px; display: block; overflow: visible; }
 svg * { transform-box: fill-box; transform-origin: center; }
-.all, .body { transform-box: view-box; transform-origin: 50% 88%; }
-.fx, .happy { opacity: 0; }
-.blush { opacity: 0; }
+.all, .spin, .rays { transform-box: view-box; transform-origin: 50px 50px; }
+.fx { opacity: 0; }
 .glow { animation: glow 2s ease-in-out infinite; }
-@keyframes glow { 50% { opacity: .55; transform: scale(1.06); } }
-.body { animation: breath 2s ease-in-out infinite; }
-@keyframes breath { 50% { transform: scale(1.03, .98); } }
+@keyframes glow { 50% { opacity: .6; transform: scale(1.08); } }
+.spin { animation: breath 2s ease-in-out infinite; }
+@keyframes breath { 50% { transform: scale(.95); } }
+.rays { animation: rays 2s ease-in-out infinite; }
+@keyframes rays { 50% { opacity: .35; transform: rotate(45deg) scale(.85); } 0%, 100% { transform: rotate(45deg); } }
 
-/* thinking: eyes run left and right, the glow flickers, dots rise */
+/* thinking: the star turns slowly, the light flickers, three dots rise */
 .thinking .fx-think { opacity: 1; }
-.thinking .look { animation: look 2s ease-in-out infinite; }
-@keyframes look { 0%, 100% { transform: translate(0, -2px); } 20%, 38% { transform: translate(-4px, -3px); } 58%, 80% { transform: translate(4px, -3px); } }
+.thinking .spin { animation: turn 2s ease-in-out infinite; }
+@keyframes turn { 0% { transform: rotate(0) scale(.96); } 50% { transform: rotate(45deg) scale(.9); } 100% { transform: rotate(90deg) scale(.96); } }
 .thinking .glow { animation: flicker 1s steps(1) infinite, glow 2s ease-in-out infinite; }
 @keyframes flicker { 0%, 100% { opacity: 1; } 30% { opacity: .7; } 45% { opacity: .95; } 70% { opacity: .75; } }
 .fx-think circle { animation: dot 1s infinite ease-in-out; }
 .fx-think circle:nth-child(2) { animation-delay: -.8s; } .fx-think circle:nth-child(3) { animation-delay: -.6s; }
 @keyframes dot { 50% { transform: translateY(-4px); opacity: .35; } }
 
-/* working: pulses, sparks fly around */
+/* working: spins fast, pulses, sparks fly around */
 .working .fx-work { opacity: 1; }
-.working .body { animation: pulse .5s ease-in-out infinite; }
-@keyframes pulse { 50% { transform: scale(1.07, 1.05); } }
+.working .spin { animation: whirl 1s linear infinite; }
+@keyframes whirl { 0% { transform: rotate(0) scale(1); } 50% { transform: rotate(45deg) scale(1.08); } 100% { transform: rotate(90deg) scale(1); } }
 .working .glow { animation: glow .5s ease-in-out infinite; }
-.working .look { transform: translate(0, -1px); }
-.orbit { transform-box: view-box; transform-origin: 50px 58px; animation: spin 2s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.working .sp { animation: tw .5s ease-in-out infinite; }
-.working .sp:nth-child(2) { animation-delay: -.25s; }
+.orbit { transform-box: view-box; transform-origin: 50px 50px; animation: orbit 2s linear infinite; }
+@keyframes orbit { to { transform: rotate(360deg); } }
 
-/* done: happy jump twice, eyes as arcs */
-.done .fx-done, .done .happy { opacity: 1; }
-.done .eyes { opacity: 0; }
-.done .all { animation: jump 1s cubic-bezier(.3,.7,.3,1) infinite; }
-@keyframes jump { 0%, 70%, 100% { transform: none; } 12% { transform: scale(1.08, .9); } 38% { transform: translateY(-12px) scale(.96, 1.05); } 60% { transform: scale(1.04, .96); } }
+/* done: bursts with light, sparkles around */
+.done .fx-done { opacity: 1; }
+.done .all { animation: pop 1s cubic-bezier(.3,.7,.3,1) infinite; }
+@keyframes pop { 0%, 70%, 100% { transform: scale(1); } 20% { transform: scale(.82); } 42% { transform: scale(1.16); } }
 .done .glow { animation: glow .5s ease-in-out infinite; }
+.done .rays { animation: rays .5s ease-in-out infinite; }
 .sp { animation: tw 1s ease-in-out infinite; }
-.sp:nth-child(2) { animation-delay: -.66s; } .sp:nth-child(3) { animation-delay: -.33s; }
+.sp:nth-child(2) { animation-delay: -.66s; } .sp:nth-child(3) { animation-delay: -.33s; } .sp:nth-child(4) { animation-delay: -.5s; }
 @keyframes tw { 0%, 100% { transform: scale(.4); opacity: .2; } 50% { transform: scale(1.15); opacity: 1; } }
 
-/* error: shrinks shyly, blushes red, a little question mark */
-.error .fx-error, .error .blush { opacity: 1; }
-.error .all { animation: shy 2s ease-in-out infinite; }
-@keyframes shy { 0%, 100% { transform: rotate(-6deg) scale(.94, .9); } 50% { transform: rotate(-9deg) scale(.9, .86); } }
-.error .look { transform: translate(-3px, 2px); }
-.error .core { filter: hue-rotate(-18deg) saturate(1.5); }
-.error .redden { opacity: 1; animation: red 2s ease-in-out infinite; }
-@keyframes red { 50% { opacity: .55; } }
-.error .blush { animation: red 1s ease-in-out infinite; }
+/* error: the light dims and shivers, a little question mark */
+.error .fx-error { opacity: 1; }
+.error .all { animation: shiver 2s ease-in-out infinite; }
+@keyframes shiver { 0%, 100% { transform: rotate(-8deg) scale(.86); } 25% { transform: rotate(6deg) scale(.84); } 50% { transform: rotate(-4deg) scale(.82); } 75% { transform: rotate(5deg) scale(.85); } }
+.error .core { filter: saturate(.3) brightness(.85); }
+.error .glow { filter: hue-rotate(-20deg) saturate(1.6); animation: glow 1s ease-in-out infinite; }
 .fx-error { animation: wob 1s ease-in-out infinite; }
 @keyframes wob { 50% { transform: rotate(12deg) translateY(-2px); } }
-.redden { opacity: 0; }
 
-/* waiting: looks right at you, bigger eyes, blinks, soft rings */
+/* waiting: shines steadily, soft rings call you */
 .waiting .fx-wait { opacity: 1; }
-.waiting .all { transform: translateY(-2px) scale(1.04); }
-.waiting .eye { animation: blink 2s infinite; }
-@keyframes blink { 0%, 44%, 52%, 100% { transform: scale(1.12, 1.12); } 48% { transform: scale(1.12, .1); } }
-.waiting .pupil { opacity: 1; }
-.pupil { opacity: 0; }
+.waiting .spin { animation: twinkle 2s ease-in-out infinite; }
+@keyframes twinkle { 0%, 40%, 100% { transform: scale(1); } 48% { transform: scale(1.1, .8); } 56% { transform: scale(1); } }
 .ring { animation: ring 2s ease-out infinite; }
 .ring:nth-child(2) { animation-delay: -1s; }
-@keyframes ring { 0% { transform: scale(.7); opacity: .7; } 100% { transform: scale(1.4); opacity: 0; } }
+@keyframes ring { 0% { transform: scale(.5); opacity: .8; } 100% { transform: scale(1.35); opacity: 0; } }
 </style></head><body>
-<svg id="s" viewBox="-6 -2 112 112" aria-hidden="true">
+<svg id="s" viewBox="-6 -6 112 112" aria-hidden="true">
   <defs>
-    <radialGradient id="a" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#fff6ee"/><stop offset=".45" stop-color="#fbe6da"/><stop offset="1" stop-color="#e2602b"/></radialGradient>
-    <radialGradient id="r" cx="50%" cy="60%" r="60%"><stop offset="0" stop-color="#ff5a4e" stop-opacity=".55"/><stop offset="1" stop-color="#d9302a" stop-opacity=".9"/></radialGradient>
-    <radialGradient id="b"><stop offset=".55" stop-color="#e2602b" stop-opacity=".35"/><stop offset="1" stop-color="#e2602b" stop-opacity="0"/></radialGradient>
+    <radialGradient id="g"><stop offset="0" stop-color="#e2602b" stop-opacity=".6"/><stop offset=".5" stop-color="#e2602b" stop-opacity=".18"/><stop offset="1" stop-color="#e2602b" stop-opacity="0"/></radialGradient>
+    <radialGradient id="c"><stop offset="0" stop-color="#fff"/><stop offset=".35" stop-color="#fff1e6"/><stop offset="1" stop-color="#f08a55"/></radialGradient>
   </defs>
-  <ellipse cx="50" cy="93" rx="16" ry="3" fill="#e2602b" opacity=".15"/>
-  <circle class="glow" cx="50" cy="56" r="44" fill="url(#b)"/>
-  <g class="fx fx-wait"><circle class="ring" cx="50" cy="58" r="30" fill="none" stroke="#e2602b" stroke-width="2.5"/><circle class="ring" cx="50" cy="58" r="30" fill="none" stroke="#e2602b" stroke-width="2.5"/></g>
-  <g class="all"><g class="body">
-    <path class="core" d="M50 20 q22 22 22 38 a22 22 0 0 1 -44 0 q0 -16 22 -38z" fill="url(#a)"/>
-    <path class="redden" d="M50 20 q22 22 22 38 a22 22 0 0 1 -44 0 q0 -16 22 -38z" fill="url(#r)"/>
-    <path d="M38 50 q2 -8 8 -12" stroke="#fff" stroke-width="3" stroke-linecap="round" fill="none" opacity=".7"/>
-    <g class="blush" fill="#ff3b3b" opacity=".6"><ellipse cx="37" cy="67" rx="4" ry="2.2"/><ellipse cx="63" cy="67" rx="4" ry="2.2"/></g>
-    <g class="look">
-      <g class="eyes"><ellipse class="eye" cx="43" cy="60" rx="3.8" ry="5.2" fill="#141414"/><ellipse class="eye" cx="57" cy="60" rx="3.8" ry="5.2" fill="#141414"/></g>
-      <g class="pupil" fill="#fff"><circle cx="44.2" cy="58" r="1.3"/><circle cx="58.2" cy="58" r="1.3"/></g>
-      <g class="happy" stroke="#141414" stroke-width="3.2" stroke-linecap="round" fill="none"><path d="M38.5 62 q4.5 -6 9 0"/><path d="M52.5 62 q4.5 -6 9 0"/></g>
-    </g>
-    <path d="M47 69 q3 2.5 6 0" stroke="#141414" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  <circle class="glow" cx="50" cy="50" r="46" fill="url(#g)"/>
+  <g class="fx fx-wait"><circle class="ring" cx="50" cy="50" r="34" fill="none" stroke="#e2602b" stroke-width="2.5"/><circle class="ring" cx="50" cy="50" r="34" fill="none" stroke="#e2602b" stroke-width="2.5"/></g>
+  <g class="all"><g class="spin">
+    <path class="rays" d="M50 25 52.8 47.2 75 50 52.8 52.8 50 75 47.2 52.8 25 50 47.2 47.2z" fill="#f6a77c" opacity=".6"/>
+    <path class="core" d="M50 10C52 38 55 45 90 50C55 55 52 62 50 90C48 62 45 55 10 50C45 45 48 38 50 10z" fill="url(#c)"/>
+    <circle cx="50" cy="50" r="7" fill="#fff"/>
   </g></g>
-  <g class="fx fx-think" fill="#141414"><circle cx="70" cy="22" r="3"/><circle cx="78" cy="22" r="3"/><circle cx="86" cy="22" r="3"/></g>
-  <g class="fx fx-work"><g class="orbit"><circle cx="50" cy="18" r="3.6" fill="#e2602b"/><circle cx="84" cy="66" r="3" fill="#1f9d55"/><circle cx="16" cy="70" r="2.6" fill="#ffb020"/></g>
-    <g><path class="sp" d="M16 28 l1.6 4 4 1.6 -4 1.6 -1.6 4 -1.6 -4 -4 -1.6 4 -1.6z" fill="#ffb020"/><path class="sp" d="M86 30 l1.6 4 4 1.6 -4 1.6 -1.6 4 -1.6 -4 -4 -1.6 4 -1.6z" fill="#e2602b"/></g></g>
-  <g class="fx fx-done"><path class="sp" d="M12 24 l2.4 6 6 2.4 -6 2.4 -2.4 6 -2.4 -6 -6 -2.4 6 -2.4z" fill="#e2602b"/><path class="sp" d="M86 16 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2z" fill="#1f9d55"/><path class="sp" d="M90 54 l1.6 4 4 1.6 -4 1.6 -1.6 4 -1.6 -4 -4 -1.6 4 -1.6z" fill="#ffb020"/></g>
-  <g class="fx fx-error"><text x="72" y="32" font-family="system-ui, sans-serif" font-weight="800" font-size="24" fill="#d9302a">?</text></g>
+  <g class="fx fx-think" fill="#f6a77c"><circle cx="72" cy="16" r="3.2"/><circle cx="81" cy="16" r="3.2"/><circle cx="90" cy="16" r="3.2"/></g>
+  <g class="fx fx-work"><g class="orbit"><circle cx="50" cy="4" r="3.6" fill="#ffb020"/><circle cx="92" cy="62" r="3" fill="#1f9d55"/><circle cx="10" cy="72" r="2.6" fill="#e2602b"/></g></g>
+  <g class="fx fx-done"><path class="sp" d="M12 14 l2.4 6 6 2.4 -6 2.4 -2.4 6 -2.4 -6 -6 -2.4 6 -2.4z" fill="#ffb020"/><path class="sp" d="M88 10 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2z" fill="#1f9d55"/><path class="sp" d="M90 80 l1.6 4 4 1.6 -4 1.6 -1.6 4 -1.6 -4 -4 -1.6 4 -1.6z" fill="#e2602b"/><path class="sp" d="M12 82 l1.6 4 4 1.6 -4 1.6 -1.6 4 -1.6 -4 -4 -1.6 4 -1.6z" fill="#fff"/></g>
+  <g class="fx fx-error"><text x="74" y="24" font-family="system-ui, sans-serif" font-weight="800" font-size="24" fill="#d9302a">?</text></g>
 </svg>
 <script>
 const s = new URLSearchParams(location.search).get('s') || 'waiting';

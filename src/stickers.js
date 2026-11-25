@@ -1,5 +1,5 @@
 // Vega's video stickers next to the live status of a run (public/spark/<state>.webm).
-// On first start the bot makes its own sticker set iskra_by_<bot> owned by the owner and keeps the
+// On first start the bot makes its own sticker set vega_by_<bot> owned by the owner and keeps the
 // file_ids in data/spark-stickers.json. Off with SPARK_STICKERS=0; without file_ids nothing changes.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,20 +13,22 @@ const FILE = path.join(DATA_DIR, 'spark-stickers.json');
 export const enabled = () => !/^(0|false|off|no)$/i.test(String(process.env.SPARK_STICKERS ?? '1').trim());
 
 let ids = null;
+let cachedSet = '';
 export function stickerIds() {
   if (ids) return ids;
-  try { ids = JSON.parse(fs.readFileSync(FILE, 'utf8')).ids || {}; } catch { ids = {}; }
+  try { const j = JSON.parse(fs.readFileSync(FILE, 'utf8')); ids = j.ids || {}; cachedSet = j.set || ''; } catch { ids = {}; }
   return ids;
 }
 export const setStickerIds = (x) => { ids = x; };
-export const setName = (botUsername) => `iskra_by_${botUsername}`;
+// The older set iskra_by_<bot> stays in Telegram; a new name means a new set.
+export const setName = (botUsername) => `vega_by_${botUsername}`;
 
 // The set of this bot: found if it is there, otherwise made from the webm files. Never throws.
 export async function ensureStickerSet(api, ownerId, botUsername) {
   if (!enabled() || !ownerId || !botUsername) return null;
   const name = setName(botUsername);
   const have = stickerIds();
-  if (STATES.every((s) => have[s])) return name;
+  if (cachedSet === name && STATES.every((s) => have[s])) return name;
   const byEmoji = (set) => Object.fromEntries(STATES.map((s) => [s, set.stickers.find((x) => x.emoji === EMOJI[s])?.file_id]).filter(([, v]) => v));
   try {
     let set = await api.getStickerSet(name).catch(() => null);
@@ -37,7 +39,7 @@ export async function ensureStickerSet(api, ownerId, botUsername) {
     }
     const found = byEmoji(set);
     fs.writeFileSync(FILE, JSON.stringify({ set: name, ids: found }, null, 1));
-    ids = found;
+    ids = found; cachedSet = name;
     addLog('system', `Наклейки ${config.assistantName}: набор ${name}, ${Object.keys(found).length} шт.`);
     return name;
   } catch (e) {
