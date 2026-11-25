@@ -100,7 +100,7 @@ config.social = { channel: env('SOCIAL_TG_CHANNEL').replace(/^@/, '') };
 // Main currency for totals in «Финансы» and the money widget (ISO code), and the owner's time zone.
 config.currency = env('CURRENCY', 'RUB').toUpperCase();
 // The assistant's name people see: bot name, greeting, the remote's title and icon caption.
-config.assistantName = env('ASSISTANT_NAME', 'Vega');
+config.assistantName = env('ASSISTANT_NAME', 'Некит');
 // OWNER_TZ moves the whole process to that zone: schedules, «today», day cards.
 if (env('OWNER_TZ')) process.env.TZ = env('OWNER_TZ');
 config.timezone = env('OWNER_TZ') || env('TZ') || Intl.DateTimeFormat().resolvedOptions().timeZone;

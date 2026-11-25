@@ -1,4 +1,4 @@
-// Vega's video stickers next to the live status of a run (public/spark/<state>.webm).
+// Некит's video stickers next to the live status of a run (public/spark/<state>.webm).
 // On first start the bot makes its own sticker set vega_by_<bot> owned by the owner and keeps the
 // file_ids in data/spark-stickers.json. Off with SPARK_STICKERS=0; without file_ids nothing changes.
 import fs from 'node:fs';

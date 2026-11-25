@@ -193,13 +193,13 @@ async function trackRun(runId, chatId, userMsgId, project) {
       addLog('error', `Статус работы: ${e.message.slice(0, 120)}`);
     }
   }
-  // Vega's sticker under the status, by state (src/stickers.js); nothing without file_ids.
+  // Некит's sticker under the status, by state (src/stickers.js); nothing without file_ids.
   t.sticker = new LiveSticker(bot.api, Number(chatId));
   t.sticker.set('thinking');
   t.timer = setInterval(() => { pushDraft(runId); t.sticker.set(runFace(runId)); }, 3000);
 }
 
-// The state Vega shows for a run: stumbled on an error, waits in the queue, works with tools, or thinks.
+// The state Некит shows for a run: stumbled on an error, waits in the queue, works with tools, or thinks.
 function runFace(runId) {
   const r = get('SELECT status FROM runs WHERE id = ?', runId);
   if (r?.status === 'queued') return 'waiting';

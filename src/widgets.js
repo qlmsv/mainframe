@@ -168,7 +168,7 @@ export async function todayData() {
   return fit({ dt, h: hr < 12 ? 'Доброе утро' : hr < 18 ? 'Добрый день' : 'Добрый вечер', ne, wi, ev, wn, rm, x });
 }
 
-// ---------- 7. «В работе»: что Vega делает сейчас, с кнопкой «Стоп» ----------
+// ---------- 7. «В работе»: что Некит делает сейчас, с кнопкой «Стоп» ----------
 const WORK = page('', `const SPK=${JSON.stringify(SPARK(44, 'sw'))};function render(d){const w=document.getElementById('w');const n=(d.r||[]).length;w.innerHTML='<div class="row">'+SPK.replace('class="spk"','class="spk '+(d.st?'waiting':n?'working':'done')+'"')+'<div class="sp"><div class="b">'+(d.st?'${NAME} на паузе':n?'${NAME} работает':'${NAME} отдыхает')+'</div><div class="m">'+(n?'дел сейчас: '+n:'новых дел нет')+(d.q?' · в очереди '+d.q:'')+'</div></div><span class="m">'+(d.tm||'')+'</span></div>'
 +'<div class="row" style="margin:8px 0">'+[['Сейчас',n],['Ждут тебя',d.i],['Сделано',d.d]].map(x=>'<div class="tile"><span class="m">'+x[0]+'</span><b>'+(x[1]??0)+'</b></div>').join('')+'</div>'
 +(d.r||[]).map(r=>'<div class="row l fade"><span>'+(r[2]?'⏰':'⚙️')+'</span><span class="sp nw">'+r[0]+'</span><span class="m">'+r[1]+' мин</span></div>').join('')
