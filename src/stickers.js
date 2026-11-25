@@ -1,5 +1,5 @@
 // Некит's video stickers next to the live status of a run (public/spark/<state>.webm).
-// On first start the bot makes its own sticker set vega_by_<bot> owned by the owner and keeps the
+// On first start the bot makes its own sticker set nekit_by_<bot> owned by the owner and keeps the
 // file_ids in data/spark-stickers.json. Off with SPARK_STICKERS=0; without file_ids nothing changes.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,8 +20,8 @@ export function stickerIds() {
   return ids;
 }
 export const setStickerIds = (x) => { ids = x; };
-// The older set iskra_by_<bot> stays in Telegram; a new name means a new set.
-export const setName = (botUsername) => `vega_by_${botUsername}`;
+// Older sets iskra_by_<bot> and vega_by_<bot> stay in Telegram; a new name means a new set.
+export const setName = (botUsername) => `nekit_by_${botUsername}`;
 
 // The set of this bot: found if it is there, otherwise made from the webm files. Never throws.
 export async function ensureStickerSet(api, ownerId, botUsername) {

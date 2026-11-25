@@ -1,4 +1,4 @@
-// Renders Vega's video stickers: public/spark/stickers.html → PNG frames (Chromium, transparent)
+// Renders Некит's video stickers: public/spark/stickers.html → PNG frames (Chromium, transparent)
 // → public/spark/<state>.webm (VP9 with alpha, 512×512, 30 fps, 2 s loop, no sound, ≤256 KB).
 // Needs playwright-core (PLAYWRIGHT_CORE=path, or vendor/browser/node_modules) and ffmpeg.
 // Run: node scripts/spark-stickers.mjs [state ...]

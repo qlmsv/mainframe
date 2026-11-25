@@ -58,7 +58,7 @@ test('a failing Telegram call does not break the status', async () => {
 });
 
 test('set name and the sticker files', () => {
-  assert.equal(setName('kai_mf_bot'), 'vega_by_kai_mf_bot');
+  assert.equal(setName('kai_mf_bot'), 'nekit_by_kai_mf_bot');
   for (const st of STATES) {
     const size = fs.statSync(new URL(`../public/spark/${st}.webm`, import.meta.url)).size;
     assert.ok(size > 1000 && size <= 256 * 1024, `${st}.webm ${size} bytes`);
