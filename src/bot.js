@@ -901,6 +901,9 @@ export function startBot() {
       // Telegram allows only some emoji as reactions: an unsupported one falls back to 👍.
       if (await react(chat, t.userMsgId, ack[1].trim()) || await react(chat, t.userMsgId, '👍')) return;
     }
+    // A reaction-only answer with nothing left to send (its message was lost, e.g. after a restart): stay quiet,
+    // an empty message would fail with «message text is empty».
+    if (r.status === 'done' && REACT_RE.test(String(r.result || ''))) return;
     if (t) react(chat, t.userMsgId, r.status === 'done' ? '👍' : r.status === 'stopped' ? '🤷' : r.status === 'deferred' ? '⏳' : '😢');
     // A scheduled task that says exactly the same as its last report within a day stays quiet.
     const task = r.origin === 'cron' && /^\[Задача по расписанию «(.+?)»\]/.exec(r.prompt || '')?.[1];
