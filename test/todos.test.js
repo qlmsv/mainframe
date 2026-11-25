@@ -7,7 +7,7 @@ test('add, dedupe, list by column, done', () => {
   const a = t.addTodo({ title: 'Позвонить Ане', status: 'today' });
   assert.equal(a.added, true);
   assert.equal(t.addTodo({ title: 'позвонить ане' }).added, false);
-  t.addTodo({ title: 'Счёт Мише', status: 'waiting', who: 'assistant' });
+  t.addTodo({ title: 'Счёт клиенту', status: 'waiting', who: 'assistant' });
   t.addTodo({ title: 'Идея поста' });
   assert.deepEqual(t.listTodos().map((x) => x.status), ['today', 'inbox', 'waiting']);
   const d = t.doneTodo(a.id);
