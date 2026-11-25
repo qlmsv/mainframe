@@ -835,7 +835,8 @@ export function startBot() {
     const reports = all("SELECT content FROM run_events WHERE run_id = ? AND kind = 'bg_report' ORDER BY id", r.id).map((x) => x.content);
     if (!reports.length) return;
     const one = reports.map((x) => extractButtons(String(x)).text).filter(Boolean).join('\n\n---\n\n').slice(0, 30000);
-    if (one) await sendAnswer(chat, `🧩 **Фоновая работа** · ${project.name}\n\n${one}`, `🧩 <b>Фоновая работа</b> · ${esc(project.name)}\n\n${answer(one)}`).catch((e) => addLog('error', `Бот: отчёт фоновой работы: ${e.message.slice(0, 120)}`));
+    // The result of the work the first answer promised: sent as a plain answer, no «Фоновая работа» header.
+    if (one) await sendAnswer(chat, one, answer(one)).catch((e) => addLog('error', `Бот: отчёт фоновой работы: ${e.message.slice(0, 120)}`));
   };
 
   onRunAnswered(async (r, project) => {
