@@ -71,7 +71,7 @@ function shrink(o) { for (const k of Object.keys(o)) if (Array.isArray(o[k]) && 
 export const PROGRESS = page(`<div class="row">${SPARK(40)}
 <div class="sp"><div class="b" id="what"></div><div class="m" id="sub"></div></div><div class="big" id="clock" style="font-size:18px"></div></div>
 <div class="m fade" id="last" style="margin-top:6px"></div>`,
-`function render(d){const e=document.getElementById.bind(document);e('spk').setAttribute('class','spk '+(d.n?'working':'thinking'));e('what').textContent=d.w||'Думаю';
+`function render(d){const e=document.getElementById.bind(document);e('spk').setAttribute('class','spk '+(d.s||(d.n?'working':'thinking')));e('what').textContent=d.s==='error'?'Споткнулась, пробую иначе':d.s==='waiting'?'Жду тебя':(d.w||'Думаю');
 e('sub').textContent=(d.p?d.p+' · ':'')+(d.n?'шаг '+d.n:'начинаю');const l=e('last');if(l.textContent!==(d.l||'')){l.textContent=d.l||'';l.classList.remove('fade');void l.offsetWidth;l.classList.add('fade')}}
 setInterval(()=>{const s=Math.max(0,Math.floor((Date.now()-(D.t0||Date.now()))/1000));document.getElementById('clock').textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0')},1000);`, null, 0);
 

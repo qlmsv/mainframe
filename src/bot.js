@@ -141,7 +141,8 @@ async function pushDraft(runId) {
     const ev = all("SELECT kind, content FROM run_events WHERE run_id = ? AND kind IN ('tool','text','error') ORDER BY id DESC LIMIT 8", runId).reverse();
     const [e, w] = activityOf(ev);
     const lastText = [...ev].reverse().find((x) => x.kind === 'text')?.content || '';
-    const state = { ...t.state, e, w, n: get("SELECT COUNT(*) c FROM run_events WHERE run_id = ? AND kind = 'tool'", runId).c, l: String(lastText).replace(/[*_`#>]/g, '').replace(/\s+/g, ' ').slice(0, 90) };
+    const st = ev.at(-1)?.kind === 'error' ? 'error' : r.status === 'queued' ? 'waiting' : '';
+    const state = { ...t.state, e, w, s: st, n: get("SELECT COUNT(*) c FROM run_events WHERE run_id = ? AND kind = 'tool'", runId).c, l: String(lastText).replace(/[*_`#>]/g, '').replace(/\s+/g, ' ').slice(0, 90) };
     const key = JSON.stringify(state);
     if (key === t.lastText) return;
     t.lastText = key; t.state = state;
